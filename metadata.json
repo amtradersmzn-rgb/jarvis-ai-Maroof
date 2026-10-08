@@ -1,6 +1,6 @@
 {
-  "name": "JARVIS AI",
-  "description": "Voice-first personal AI mobile assistant optimized for OPPO Reno14 5G and ColorOS 16.",
+  "name": "JARVIS V3",
+  "description": "Your Personal AI Assistant for OPPO Reno 14 5G running ColorOS 16.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

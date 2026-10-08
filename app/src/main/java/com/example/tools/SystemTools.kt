@@ -4,6 +4,10 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.media.AudioManager
+import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
@@ -12,6 +16,7 @@ import android.provider.AlarmClock
 import android.provider.Settings
 import com.example.engine.ColorOSHelper
 import com.example.engine.SettingsType
+import com.example.engine.VolumeDirection
 
 class AlarmTool : JarvisTool {
     override val toolId: String = "create_alarm"
@@ -81,6 +86,147 @@ class TimerTool : JarvisTool {
                 success = false,
                 spokenResponse = "Timer start nahi ho saka: ${e.message}",
                 displayMessage = "Failed to set timer: ${e.message}"
+            )
+        }
+    }
+}
+
+class TorchTool : JarvisTool {
+    override val toolId: String = "toggle_torch"
+    override val name: String = "Flashlight / Torch"
+    override val requiredPermission: String? = null
+    override val requiresConfirmation: Boolean = false
+
+    override suspend fun execute(context: Context, params: Map<String, Any?>): ToolResult {
+        val enable = params["enable"] as? Boolean ?: true
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            ?: return ToolResult(false, "Camera service unavailable.")
+
+        return try {
+            val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                try {
+                    cameraManager.getCameraCharacteristics(id)
+                        .get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                } catch (_: Exception) {
+                    false
+                }
+            } ?: cameraManager.cameraIdList.firstOrNull()
+
+            if (cameraId != null) {
+                cameraManager.setTorchMode(cameraId, enable)
+                val statusText = if (enable) "turn on" else "turn off"
+                val spoken = if (enable) "Torch on kar di hai." else "Torch band kar di hai."
+                ToolResult(
+                    success = true,
+                    spokenResponse = spoken,
+                    displayMessage = "Flashlight ${if (enable) "Enabled" else "Disabled"}."
+                )
+            } else {
+                ToolResult(
+                    success = false,
+                    spokenResponse = "Device mein flashlight camera nahi mila.",
+                    displayMessage = "No camera flashlight found on device."
+                )
+            }
+        } catch (e: Exception) {
+            ToolResult(
+                success = false,
+                spokenResponse = "Torch operate karne mein problem aayi: ${e.message}",
+                displayMessage = "Torch error: ${e.message}"
+            )
+        }
+    }
+}
+
+class VolumeTool : JarvisTool {
+    override val toolId: String = "adjust_volume"
+    override val name: String = "Volume Control"
+    override val requiredPermission: String? = null
+    override val requiresConfirmation: Boolean = false
+
+    override suspend fun execute(context: Context, params: Map<String, Any?>): ToolResult {
+        val direction = params["direction"] as? VolumeDirection ?: VolumeDirection.UP
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            ?: return ToolResult(false, "Audio service unavailable.")
+
+        return try {
+            when (direction) {
+                VolumeDirection.UP -> {
+                    audioManager.adjustStreamVolume(
+                        AudioManager.STREAM_MUSIC,
+                        AudioManager.ADJUST_RAISE,
+                        AudioManager.FLAG_SHOW_UI
+                    )
+                    ToolResult(
+                        success = true,
+                        spokenResponse = "Volume badha diya hai.",
+                        displayMessage = "Volume increased."
+                    )
+                }
+                VolumeDirection.DOWN -> {
+                    audioManager.adjustStreamVolume(
+                        AudioManager.STREAM_MUSIC,
+                        AudioManager.ADJUST_LOWER,
+                        AudioManager.FLAG_SHOW_UI
+                    )
+                    ToolResult(
+                        success = true,
+                        spokenResponse = "Volume kam kar diya hai.",
+                        displayMessage = "Volume decreased."
+                    )
+                }
+                VolumeDirection.MUTE -> {
+                    audioManager.adjustStreamVolume(
+                        AudioManager.STREAM_MUSIC,
+                        AudioManager.ADJUST_MUTE,
+                        AudioManager.FLAG_SHOW_UI
+                    )
+                    ToolResult(
+                        success = true,
+                        spokenResponse = "Volume mute kar diya hai.",
+                        displayMessage = "Audio muted."
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            ToolResult(
+                success = false,
+                spokenResponse = "Volume adjust nahi ho saka: ${e.message}",
+                displayMessage = "Volume adjustment error: ${e.message}"
+            )
+        }
+    }
+}
+
+class SmsTool : JarvisTool {
+    override val toolId: String = "send_sms"
+    override val name: String = "Send SMS"
+    override val requiredPermission: String? = null
+    override val requiresConfirmation: Boolean = true
+
+    override suspend fun execute(context: Context, params: Map<String, Any?>): ToolResult {
+        val contactName = params["contactName"] as? String ?: "Contact"
+        val phoneNumber = params["phoneNumber"] as? String ?: ""
+        val message = params["message"] as? String ?: ""
+
+        val intent = Intent(Intent.ACTION_SENDTO).apply {
+            data = Uri.parse("smsto:${phoneNumber.replace("[^0-9+]".toRegex(), "")}")
+            putExtra("sms_body", message)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        return try {
+            context.startActivity(intent)
+            ToolResult(
+                success = true,
+                spokenResponse = "Ji, $contactName ke liye message composer open kar diya hai.",
+                displayMessage = "SMS Composer opened for $contactName."
+            )
+        } catch (e: Exception) {
+            ToolResult(
+                success = false,
+                spokenResponse = "Messaging app open nahi ho saka: ${e.message}",
+                displayMessage = "SMS error: ${e.message}"
             )
         }
     }

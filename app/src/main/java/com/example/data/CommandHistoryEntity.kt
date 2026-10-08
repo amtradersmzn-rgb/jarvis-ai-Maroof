@@ -11,5 +11,6 @@ data class CommandHistoryEntity(
     val userQuery: String,
     val jarvisResponse: String,
     val toolUsed: String = "none",
+    val aiUsed: String = "JARVIS",
     val success: Boolean = true
 )

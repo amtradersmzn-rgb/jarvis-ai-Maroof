@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">JARVIS AI</string>
+    <string name="app_name">JARVIS V3</string>
+    <string name="accessibility_service_desc">Enables hands-free voice-controlled screen lock and system actions when authorized by voice biometric verification.</string>
 </resources>

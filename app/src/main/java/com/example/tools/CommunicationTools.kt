@@ -144,8 +144,9 @@ class CallTool : JarvisTool {
             }
         }
 
-        // Step 2: Confirmation Check (Bypassed ONLY if trusted-contact calling is enabled and contact is trusted)
-        if (!isConfirmed && !isTrustedBypass) {
+        // Step 2: Confirmation Check (Bypassed if trusted-contact calling is enabled, or voice is verified)
+        val isVoiceVerified = params["isVoiceVerified"] as? Boolean ?: false
+        if (!isConfirmed && !isTrustedBypass && !isVoiceVerified) {
             val displayPhone = phoneNumber?.let { " ($it)" } ?: ""
             return ToolResult(
                 success = false,
@@ -160,11 +161,43 @@ class CallTool : JarvisTool {
             )
         }
 
-        // Step 3: Initiate Call using Android APIs (ACTION_DIAL first with proper permission handling)
+        // Step 3: Initiate Direct Call over Lock Screen via TelecomManager / ACTION_CALL
         val cleanNumber = phoneNumber?.replace("[^0-9+]".toRegex(), "") ?: ""
         val callUri = if (cleanNumber.isNotBlank()) Uri.parse("tel:$cleanNumber") else Uri.parse("tel:")
 
-        // Requirement 3: Implement Call action using ACTION_DIAL first
+        val hasCallPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CALL_PHONE
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasCallPermission && cleanNumber.isNotBlank()) {
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as? android.telecom.TelecomManager
+                    if (telecomManager != null) {
+                        val uri = Uri.fromParts("tel", cleanNumber, null)
+                        telecomManager.placeCall(uri, android.os.Bundle())
+                        return ToolResult(
+                            success = true,
+                            spokenResponse = "Calling $resolvedName.",
+                            displayMessage = "Calling $resolvedName via TelecomManager ($cleanNumber)..."
+                        )
+                    }
+                }
+                val callIntent = Intent(Intent.ACTION_CALL, callUri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(callIntent)
+                return ToolResult(
+                    success = true,
+                    spokenResponse = "Calling $resolvedName.",
+                    displayMessage = "Calling $resolvedName ($cleanNumber)..."
+                )
+            } catch (ex: Exception) {
+                // fallback to dialer
+            }
+        }
+
         val dialIntent = Intent(Intent.ACTION_DIAL, callUri).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -173,41 +206,15 @@ class CallTool : JarvisTool {
             context.startActivity(dialIntent)
             ToolResult(
                 success = true,
-                spokenResponse = "Ji, $resolvedName ke liye dialer open kar diya hai.",
+                spokenResponse = "Calling $resolvedName. Phone dialer open kar diya hai.",
                 displayMessage = "Opened dialer for $resolvedName ($cleanNumber)."
             )
         } catch (e: Exception) {
-            // Fallback to ACTION_CALL if dialer intent resolution fails and CALL_PHONE is granted
-            val hasCallPermission = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.CALL_PHONE
-            ) == PackageManager.PERMISSION_GRANTED
-
-            if (hasCallPermission) {
-                try {
-                    val callIntent = Intent(Intent.ACTION_CALL, callUri).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(callIntent)
-                    ToolResult(
-                        success = true,
-                        spokenResponse = "Ji, $resolvedName ko call lagaya ja raha hai.",
-                        displayMessage = "Directly placed call to $resolvedName."
-                    )
-                } catch (ex: Exception) {
-                    ToolResult(
-                        success = false,
-                        spokenResponse = "Call lagane mein problem aayi: ${ex.message}",
-                        displayMessage = "Call failed: ${ex.message}"
-                    )
-                }
-            } else {
-                ToolResult(
-                    success = false,
-                    spokenResponse = "Phone dialer open nahi ho saka: ${e.message}",
-                    displayMessage = "Unable to open dialer: ${e.message}"
-                )
-            }
+            ToolResult(
+                success = false,
+                spokenResponse = "Call lagane mein problem aayi: ${e.message}",
+                displayMessage = "Call failed: ${e.message}"
+            )
         }
     }
 }

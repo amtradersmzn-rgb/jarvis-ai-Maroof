@@ -12,7 +12,7 @@ import androidx.room.RoomDatabase
         CommandHistoryEntity::class,
         TrustedContactEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {

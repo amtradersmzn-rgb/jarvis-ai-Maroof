@@ -1,6 +1,9 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.CommandHistoryEntity
@@ -9,17 +12,22 @@ import com.example.data.MemoryEntity
 import com.example.data.RoutineEntity
 import com.example.data.TrustedContactEntity
 import com.example.engine.ActionPlanner
+import com.example.engine.ActiveAiEngine
 import com.example.engine.AiCoreMode
+import com.example.engine.AiResponse
 import com.example.engine.GeminiBrainClient
 import com.example.engine.IntentClassifier
 import com.example.engine.JarvisIntent
 import com.example.engine.JarvisState
+import com.example.engine.OpenAiClient
+import com.example.engine.VolumeDirection
 import com.example.service.JarvisForegroundService
 import com.example.speech.SpeechManager
 import com.example.speech.TtsManager
 import com.example.tools.ContactMatch
 import com.example.tools.ContactResolver
 import com.example.tools.ToolResult
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,7 +35,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 enum class ScreenNav {
     MAIN,
@@ -36,7 +47,10 @@ enum class ScreenNav {
     MEMORY_VAULT,
     ROUTINES,
     SETTINGS,
-    CONTACTS
+    CONTACTS,
+    PERMISSION_CENTER,
+    HISTORY,
+    COMPARE
 }
 
 data class ContactDisambiguationPending(
@@ -53,26 +67,47 @@ data class PendingConfirmation(
 )
 
 data class JarvisUiState(
-    val userName: String = "Maroof",
+    val userName: String = "Sir",
     val assistantState: JarvisState = JarvisState.Idle,
     val coreMode: AiCoreMode = AiCoreMode.IDLE,
     val audioRmsDb: Float = 0f,
     val lastUserQuery: String = "",
-    val lastJarvisResponse: String = "Main ready hoon. Aap kya karna chahte hain?",
+    val lastJarvisResponse: String = "JARVIS V3 initialized. Ready for your command.",
     val lastToolUsed: String = "none",
+    val lastAiEngineUsed: String = "System",
     val isListening: Boolean = false,
     val isSpeaking: Boolean = false,
     val isWakeWordActive: Boolean = false,
-    val speechRate: Float = 1.05f,
-    val speechPitch: Float = 0.95f,
-    val apiKey: String = "",
+    val speechRate: Float = 1.0f,
+    val speechPitch: Float = 0.92f,
+    val speechLanguage: String = "Hinglish",
+    val chatGptApiKey: String = "",
+    val geminiApiKey: String = "",
+    val activeAiEngine: ActiveAiEngine = ActiveAiEngine.AUTO,
     val isSetupComplete: Boolean = true,
-    val greeting: String = "Good Evening",
+    val greeting: String = "Good Day",
     val confirmationPending: PendingConfirmation? = null,
     val disambiguationPending: ContactDisambiguationPending? = null,
     val isTrustedCallingEnabled: Boolean = false,
+    val isConversationModeEnabled: Boolean = true,
+    val isConfirmationModeEnabled: Boolean = true,
+    val isMemoryEnabled: Boolean = true,
+    val isOnline: Boolean = true,
     val isNativeSpeechAvailable: Boolean = true,
-    val liveSpeechTranscript: String = ""
+    val liveSpeechTranscript: String = "",
+    // Voice Biometric Verification State
+    val voiceBiometricScore: Float = 94.5f,
+    val isVoiceBiometricVerified: Boolean = true,
+    val isVoiceBiometricEnrolled: Boolean = true,
+    val isSimulatedGuest: Boolean = false,
+    val unlockScreenRequested: Boolean = false,
+    val isAccessibilityEnabled: Boolean = false,
+    // Compare Mode State
+    val compareQuery: String = "",
+    val compareChatGptResponse: String = "",
+    val compareGeminiResponse: String = "",
+    val compareSummaryResponse: String = "",
+    val isComparing: Boolean = false
 )
 
 class JarvisViewModel(application: Application) : AndroidViewModel(application) {
@@ -85,7 +120,12 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     private val classifier = IntentClassifier()
     private val actionPlanner = ActionPlanner(application)
+    private val openAiClient = OpenAiClient()
     private val geminiClient = GeminiBrainClient()
+    private val voiceBiometricManager = com.example.engine.VoiceBiometricManager(application)
+
+    private val _unlockEvent = kotlinx.coroutines.flow.MutableSharedFlow<Float>(extraBufferCapacity = 1)
+    val unlockEvent: kotlinx.coroutines.flow.SharedFlow<Float> = _unlockEvent
 
     private val _uiState = MutableStateFlow(JarvisUiState())
     val uiState: StateFlow<JarvisUiState> = _uiState.asStateFlow()
@@ -110,10 +150,50 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         updateGreeting()
+        checkNetworkStatus()
         initAudioEngines()
         loadPersistedConfig()
         seedDefaultRoutinesIfEmpty()
         seedDefaultContactsIfEmpty()
+        viewModelScope.launch {
+            voiceBiometricManager.loadBiometricProfile()
+            checkAccessibilityStatus()
+        }
+    }
+
+    fun checkAccessibilityStatus() {
+        val enabled = com.example.service.JarvisAccessibilityService.isAccessibilityEnabled(getApplication())
+        _uiState.value = _uiState.value.copy(isAccessibilityEnabled = enabled)
+    }
+
+    fun setSimulatedGuestMode(isGuest: Boolean) {
+        voiceBiometricManager.setSimulatedGuestMode(isGuest)
+        val score = if (isGuest) 62.4f else 96.5f
+        _uiState.value = _uiState.value.copy(
+            isSimulatedGuest = isGuest,
+            voiceBiometricScore = score,
+            isVoiceBiometricVerified = !isGuest
+        )
+    }
+
+    fun triggerVoiceBiometricVerification(spokenText: String): com.example.engine.VoiceVerificationResult {
+        val result = voiceBiometricManager.verifyVoice(
+            spokenText = spokenText,
+            rmsDb = _uiState.value.audioRmsDb
+        )
+        _uiState.value = _uiState.value.copy(
+            voiceBiometricScore = result.similarityScore,
+            isVoiceBiometricVerified = result.isVerified
+        )
+        return result
+    }
+
+    fun checkNetworkStatus() {
+        val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val isConnected = cm?.activeNetwork?.let { network ->
+            cm.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } ?: false
+        _uiState.value = _uiState.value.copy(isOnline = isConnected)
     }
 
     private fun updateGreeting() {
@@ -183,33 +263,58 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                     coreMode = AiCoreMode.IDLE,
                     isSpeaking = false
                 )
+                // Conversational Mode: Keep listening briefly for follow-ups
+                if (_uiState.value.isConversationModeEnabled) {
+                    viewModelScope.launch {
+                        delay(500)
+                        // Trigger brief follow-up prompt
+                    }
+                }
             }
         )
     }
 
     private fun loadPersistedConfig() {
         viewModelScope.launch {
-            val name = memoryDao.getValueByKey("user_name") ?: "Maroof"
-            val key = memoryDao.getValueByKey("api_key") ?: ""
+            val name = memoryDao.getValueByKey("user_name") ?: "Sir"
+            val chatGptKey = memoryDao.getValueByKey("chatgpt_api_key") ?: ""
+            val geminiKey = memoryDao.getValueByKey("gemini_api_key") ?: memoryDao.getValueByKey("api_key") ?: ""
+            val engineStr = memoryDao.getValueByKey("default_ai_engine")
             val rateStr = memoryDao.getValueByKey("voice_rate")
             val pitchStr = memoryDao.getValueByKey("voice_pitch")
+            val langStr = memoryDao.getValueByKey("language") ?: "Hinglish"
             val setupDone = memoryDao.getValueByKey("setup_completed") == "true"
             val trustedCalling = memoryDao.getValueByKey("trusted_calling_enabled") != "false"
+            val conversationMode = memoryDao.getValueByKey("conversation_mode_enabled") != "false"
+            val confirmationMode = memoryDao.getValueByKey("confirmation_mode_enabled") != "false"
+            val memoryEnabled = memoryDao.getValueByKey("memory_enabled") != "false"
 
-            val rate = rateStr?.toFloatOrNull() ?: 1.05f
-            val pitch = pitchStr?.toFloatOrNull() ?: 0.95f
+            val rate = rateStr?.toFloatOrNull() ?: 1.0f
+            val pitch = pitchStr?.toFloatOrNull() ?: 0.92f
+            val engine = try {
+                if (engineStr != null) ActiveAiEngine.valueOf(engineStr) else ActiveAiEngine.AUTO
+            } catch (_: Exception) {
+                ActiveAiEngine.AUTO
+            }
 
             ttsManager?.speechRate = rate
             ttsManager?.speechPitch = pitch
-            geminiClient.updateApiKey(key)
+            openAiClient.updateApiKey(chatGptKey)
+            geminiClient.updateApiKey(geminiKey)
 
             _uiState.value = _uiState.value.copy(
                 userName = name,
-                apiKey = key,
+                chatGptApiKey = chatGptKey,
+                geminiApiKey = geminiKey,
+                activeAiEngine = engine,
                 speechRate = rate,
                 speechPitch = pitch,
+                speechLanguage = langStr,
                 isSetupComplete = setupDone,
-                isTrustedCallingEnabled = trustedCalling
+                isTrustedCallingEnabled = trustedCalling,
+                isConversationModeEnabled = conversationMode,
+                isConfirmationModeEnabled = confirmationMode,
+                isMemoryEnabled = memoryEnabled
             )
         }
     }
@@ -260,25 +365,25 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 contactDao.insert(
                     TrustedContactEntity(
-                        name = "Ali Khan",
-                        phoneNumber = "+91 98765 00002",
-                        relationship = "Friend",
+                        name = "Abdul",
+                        phoneNumber = "+91 98765 11111",
+                        relationship = "Brother",
                         isTrusted = false
                     )
                 )
                 contactDao.insert(
                     TrustedContactEntity(
-                        name = "Ali Ahmad",
-                        phoneNumber = "+91 98765 00003",
+                        name = "Abdul Mateen",
+                        phoneNumber = "+91 98765 22222",
                         relationship = "Colleague",
                         isTrusted = false
                     )
                 )
                 contactDao.insert(
                     TrustedContactEntity(
-                        name = "Maroof",
-                        phoneNumber = "+91 98765 11111",
-                        relationship = "Self",
+                        name = "Ahmed",
+                        phoneNumber = "+91 98765 33333",
+                        relationship = "Friend",
                         isTrusted = true
                     )
                 )
@@ -305,7 +410,6 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
             if (nativeAvailable) {
                 speechManager?.startListening("hi-IN")
             } else {
-                // Preview Fallback: Activate listening state with visualizer and test options
                 _uiState.value = _uiState.value.copy(
                     assistantState = JarvisState.Listening(),
                     coreMode = AiCoreMode.LISTENING,
@@ -319,19 +423,17 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     fun simulateVoiceCommand(command: String) {
         viewModelScope.launch {
             ttsManager?.stop()
-            // 1. Listening state
             _uiState.value = _uiState.value.copy(
                 assistantState = JarvisState.Listening(),
                 coreMode = AiCoreMode.LISTENING,
                 isListening = true,
                 liveSpeechTranscript = command
             )
-            for (i in 1..4) {
-                delay(120)
-                _uiState.value = _uiState.value.copy(audioRmsDb = 5f + i * 2.5f)
+            for (i in 1..3) {
+                delay(100)
+                _uiState.value = _uiState.value.copy(audioRmsDb = 5f + i * 3f)
             }
-            delay(150)
-            // 2. Processing state
+            delay(100)
             _uiState.value = _uiState.value.copy(
                 isListening = false,
                 audioRmsDb = 0f,
@@ -339,8 +441,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                 coreMode = AiCoreMode.THINKING,
                 liveSpeechTranscript = ""
             )
-            delay(150)
-            // 3. Process recognized speech
+            delay(100)
             processInput(command)
         }
     }
@@ -352,6 +453,12 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun processInput(rawText: String) {
         viewModelScope.launch {
+            checkNetworkStatus()
+            checkAccessibilityStatus()
+
+            // Run voice biometric verification against enrolled owner voiceprint
+            val verification = triggerVoiceBiometricVerification(rawText)
+
             _uiState.value = _uiState.value.copy(
                 lastUserQuery = rawText,
                 assistantState = JarvisState.Thinking(rawText),
@@ -375,84 +482,330 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
             // Step 1: NLP Intent Classification
             val intent = classifier.classify(rawText)
 
-            // Step 2: Handle Calling Logic with Disambiguation and Confirmation
-            if (intent is JarvisIntent.MakeCall) {
-                handleCallIntent(intent)
+            // Security Gate: Phone Lock (Requires Biometric Similarity >= 85%)
+            if (intent is JarvisIntent.LockPhone) {
+                if (verification.similarityScore < com.example.engine.VoiceBiometricManager.BIOMETRIC_SIMILARITY_THRESHOLD) {
+                    val rejectMsg = "Voice biometric verification failed (${String.format(Locale.US, "%.1f", verification.similarityScore)}% < 85%). Phone lock action rejected for security."
+                    recordHistoryAndSpeak(rawText, rejectMsg, "VoiceBiometricSecurity", "OS Security", false)
+                    return@launch
+                }
+                val toolResult = actionPlanner.planAndExecute(intent.copy(biometricScore = verification.similarityScore))
+                recordHistoryAndSpeak(rawText, toolResult.spokenResponse, "JarvisAccessibilityService", "OS Action", toolResult.success)
                 return@launch
             }
 
-            // Step 3: Handle WhatsApp Confirmation Check
-            if (intent is JarvisIntent.OpenWhatsApp && !intent.isConfirmed) {
-                handleWhatsAppIntent(intent)
+            // Security Gate: Phone Unlock (Requires Biometric Similarity >= 85%)
+            if (intent is JarvisIntent.UnlockPhone) {
+                if (verification.similarityScore < com.example.engine.VoiceBiometricManager.BIOMETRIC_SIMILARITY_THRESHOLD) {
+                    val rejectMsg = "Voice biometric verification failed (${String.format(Locale.US, "%.1f", verification.similarityScore)}% < 85%). Phone unlock action rejected for security."
+                    recordHistoryAndSpeak(rawText, rejectMsg, "VoiceBiometricSecurity", "OS Security", false)
+                    return@launch
+                }
+                _unlockEvent.emit(verification.similarityScore)
+                val unlockMsg = "Voice verified (${String.format(Locale.US, "%.1f", verification.similarityScore)}%). Dismissing keyguard for Face Unlock."
+                recordHistoryAndSpeak(rawText, unlockMsg, "KeyguardUnlockHelper", "OS Action", true)
                 return@launch
             }
 
-            // Step 4: Action Planning & Execution
+            // Step 2: Handle Explicit AI Requests & Compare
+            when (intent) {
+                is JarvisIntent.AskChatGpt -> {
+                    handleDirectChatGptQuery(intent.query)
+                    return@launch
+                }
+                is JarvisIntent.AskGemini -> {
+                    handleDirectGeminiQuery(intent.query)
+                    return@launch
+                }
+                is JarvisIntent.CompareAi -> {
+                    handleCompareAiQuery(intent.query)
+                    return@launch
+                }
+                is JarvisIntent.SummarizeComparison -> {
+                    summarizeCompareResponses()
+                    return@launch
+                }
+                is JarvisIntent.MakeCall -> {
+                    handleCallIntent(intent.copy(isVoiceVerified = verification.isVerified))
+                    return@launch
+                }
+                is JarvisIntent.OpenWhatsApp -> {
+                    if (!intent.isConfirmed && !intent.message.isNullOrBlank() && _uiState.value.isConfirmationModeEnabled && !verification.isVerified) {
+                        handleWhatsAppConfirmation(intent)
+                        return@launch
+                    }
+                }
+                is JarvisIntent.SendSms -> {
+                    if (!intent.isConfirmed && _uiState.value.isConfirmationModeEnabled && !verification.isVerified) {
+                        handleSmsConfirmation(intent)
+                        return@launch
+                    }
+                }
+                else -> {}
+            }
+
+            // Step 3: Handle Auto AI or System Actions
+            if (intent is JarvisIntent.GeneralChat) {
+                handleGeneralChatOrAutoAi(rawText, intent)
+                return@launch
+            }
+
+            // Step 4: Execute Native Android Actions
             _uiState.value = _uiState.value.copy(
-                assistantState = JarvisState.Executing("Processing command"),
+                assistantState = JarvisState.Executing("Executing command"),
                 coreMode = AiCoreMode.EXECUTING
             )
 
-            val toolResult: ToolResult = if (intent is JarvisIntent.GeneralChat && _uiState.value.apiKey.isNotBlank()) {
-                val onlineAnswer = geminiClient.queryAi(
-                    userPrompt = rawText,
-                    systemContext = "You are JARVIS, an intelligent, polite, futuristic personal AI mobile assistant optimized for OPPO Reno14 5G. Respond in concise Hinglish."
-                )
-                if (onlineAnswer != null) {
-                    ToolResult(true, onlineAnswer, onlineAnswer)
-                } else {
-                    actionPlanner.planAndExecute(intent)
+            val toolResult: ToolResult = actionPlanner.planAndExecute(intent)
+
+            recordHistoryAndSpeak(
+                query = rawText,
+                response = toolResult.spokenResponse,
+                toolUsed = intent.javaClass.simpleName,
+                aiUsed = "Auto [Action]",
+                success = toolResult.success
+            )
+        }
+    }
+
+    private suspend fun handleDirectChatGptQuery(query: String) {
+        if (!_uiState.value.isOnline) {
+            val offlineMsg = "ChatGPT use karne ke liye internet connection required hai."
+            recordHistoryAndSpeak(query, offlineMsg, "ChatGptClient", "ChatGPT", false)
+            return
+        }
+
+        if (_uiState.value.chatGptApiKey.isBlank()) {
+            val keyMissingMsg = "ChatGPT connection unavailable hai. Kripya Settings se OpenAI API key enter karein."
+            recordHistoryAndSpeak(query, keyMissingMsg, "ChatGptClient", "ChatGPT", false)
+            return
+        }
+
+        _uiState.value = _uiState.value.copy(
+            assistantState = JarvisState.Thinking("Querying ChatGPT..."),
+            coreMode = AiCoreMode.THINKING
+        )
+
+        val sysPrompt = "You are JARVIS V3, a calm, intelligent, concise, futuristic personal assistant for OPPO Reno 14 5G. Provide short, clear answers in natural ${_uiState.value.speechLanguage}."
+        val resp = openAiClient.queryAi(query, sysPrompt)
+        when (resp) {
+            is AiResponse.Success -> {
+                recordHistoryAndSpeak(query, resp.text, "ChatGptClient", "ChatGPT", true)
+            }
+            is AiResponse.Error -> {
+                recordHistoryAndSpeak(query, resp.errorMessage, "ChatGptClient", "ChatGPT", false)
+            }
+        }
+    }
+
+    private suspend fun handleDirectGeminiQuery(query: String) {
+        if (!_uiState.value.isOnline) {
+            val offlineMsg = "Gemini use karne ke liye internet connection required hai."
+            recordHistoryAndSpeak(query, offlineMsg, "GeminiClient", "Gemini", false)
+            return
+        }
+
+        if (_uiState.value.geminiApiKey.isBlank()) {
+            val keyMissingMsg = "Gemini connection unavailable hai. Kripya Settings se Gemini API key enter karein."
+            recordHistoryAndSpeak(query, keyMissingMsg, "GeminiClient", "Gemini", false)
+            return
+        }
+
+        _uiState.value = _uiState.value.copy(
+            assistantState = JarvisState.Thinking("Querying Gemini..."),
+            coreMode = AiCoreMode.THINKING
+        )
+
+        val sysPrompt = "You are JARVIS V3, a calm, intelligent, concise, futuristic personal assistant for OPPO Reno 14 5G. Provide short, clear answers in natural ${_uiState.value.speechLanguage}."
+        val resp = geminiClient.queryAi(query, sysPrompt)
+        when (resp) {
+            is AiResponse.Success -> {
+                recordHistoryAndSpeak(query, resp.text, "GeminiClient", "Gemini", true)
+            }
+            is AiResponse.Error -> {
+                recordHistoryAndSpeak(query, resp.errorMessage, "GeminiClient", "Gemini", false)
+            }
+        }
+    }
+
+    private suspend fun handleGeneralChatOrAutoAi(rawText: String, fallbackIntent: JarvisIntent.GeneralChat) {
+        val currentEngine = _uiState.value.activeAiEngine
+
+        when (currentEngine) {
+            ActiveAiEngine.CHATGPT -> {
+                handleDirectChatGptQuery(rawText)
+                return
+            }
+            ActiveAiEngine.GEMINI -> {
+                handleDirectGeminiQuery(rawText)
+                return
+            }
+            ActiveAiEngine.COMPARE -> {
+                handleCompareAiQuery(rawText)
+                return
+            }
+            ActiveAiEngine.AUTO -> {
+                // Intelligent routing:
+                // If offline -> local fallback
+                if (!_uiState.value.isOnline) {
+                    val offlineMsg = "Internet connection nahi hai. Main local functions jaise torch, volume, alarm, apps execute kar sakta hoon."
+                    recordHistoryAndSpeak(rawText, offlineMsg, "OfflineBrain", "Auto [Local]", false)
+                    return
                 }
-            } else {
-                actionPlanner.planAndExecute(intent)
+
+                // If Gemini key is available -> use Gemini
+                if (_uiState.value.geminiApiKey.isNotBlank()) {
+                    val sysPrompt = "You are JARVIS V3, a calm, intelligent, concise, futuristic personal assistant for OPPO Reno 14 5G. Answer briefly in natural ${_uiState.value.speechLanguage}."
+                    val resp = geminiClient.queryAi(rawText, sysPrompt)
+                    if (resp is AiResponse.Success) {
+                        recordHistoryAndSpeak(rawText, resp.text, "GeminiBrain", "Auto [Gemini]", true)
+                        return
+                    }
+                }
+
+                // If ChatGPT key is available -> use ChatGPT
+                if (_uiState.value.chatGptApiKey.isNotBlank()) {
+                    val sysPrompt = "You are JARVIS V3, a calm, intelligent, concise, futuristic personal assistant for OPPO Reno 14 5G. Answer briefly in natural ${_uiState.value.speechLanguage}."
+                    val resp = openAiClient.queryAi(rawText, sysPrompt)
+                    if (resp is AiResponse.Success) {
+                        recordHistoryAndSpeak(rawText, resp.text, "ChatGptBrain", "Auto [ChatGPT]", true)
+                        return
+                    }
+                }
+
+                // Local intelligent assistant fallback
+                val localAnswer = when {
+                    rawText.contains("who are you") || rawText.contains("kaun ho") ->
+                        "Hello. I am JARVIS V3, your personal AI assistant. I'm ready to help."
+                    rawText.contains("battery") ->
+                        "Aapki battery status check kar raha hoon."
+                    else ->
+                        "Ji, main ready hoon. Aap 'torch on', 'alarm lagao', 'ChatGPT se pucho', ya 'call karo' bol sakte hain."
+                }
+                recordHistoryAndSpeak(rawText, localAnswer, "LocalEngine", "Auto [System]", true)
+            }
+        }
+    }
+
+    fun handleCompareAiQuery(query: String) {
+        viewModelScope.launch {
+            checkNetworkStatus()
+            _uiState.value = _uiState.value.copy(
+                compareQuery = query,
+                compareChatGptResponse = "Querying ChatGPT...",
+                compareGeminiResponse = "Querying Gemini...",
+                compareSummaryResponse = "",
+                isComparing = true,
+                assistantState = JarvisState.Thinking("Comparing ChatGPT & Gemini..."),
+                coreMode = AiCoreMode.THINKING
+            )
+            _currentScreen.value = ScreenNav.COMPARE
+
+            val sysPrompt = "Answer concisely and factually in natural ${_uiState.value.speechLanguage}."
+
+            val chatGptDeferred = async {
+                if (_uiState.value.chatGptApiKey.isNotBlank()) {
+                    openAiClient.queryAi(query, sysPrompt)
+                } else {
+                    AiResponse.Error("ChatGPT API key not configured in Settings.")
+                }
             }
 
-            // Step 5: Record Audit History
-            historyDao.insert(
-                CommandHistoryEntity(
-                    userQuery = rawText,
-                    jarvisResponse = toolResult.spokenResponse,
-                    toolUsed = intent.javaClass.simpleName,
-                    success = toolResult.success
-                )
-            )
-
-            // Step 6: Voice Output & State Update
-            _uiState.value = _uiState.value.copy(
-                lastJarvisResponse = toolResult.spokenResponse,
-                lastToolUsed = intent.javaClass.simpleName,
-                assistantState = if (toolResult.success) {
-                    JarvisState.Speaking(toolResult.spokenResponse)
+            val geminiDeferred = async {
+                if (_uiState.value.geminiApiKey.isNotBlank()) {
+                    geminiClient.queryAi(query, sysPrompt)
                 } else {
-                    JarvisState.Error(toolResult.spokenResponse)
-                },
-                coreMode = if (toolResult.success) AiCoreMode.SPEAKING else AiCoreMode.ERROR
+                    AiResponse.Error("Gemini API key not configured in Settings.")
+                }
+            }
+
+            val chatGptRes = chatGptDeferred.await()
+            val geminiRes = geminiDeferred.await()
+
+            val chatGptText = when (chatGptRes) {
+                is AiResponse.Success -> chatGptRes.text
+                is AiResponse.Error -> chatGptRes.errorMessage
+            }
+
+            val geminiText = when (geminiRes) {
+                is AiResponse.Success -> geminiRes.text
+                is AiResponse.Error -> geminiRes.errorMessage
+            }
+
+            _uiState.value = _uiState.value.copy(
+                compareChatGptResponse = chatGptText,
+                compareGeminiResponse = geminiText,
+                isComparing = false,
+                assistantState = JarvisState.Speaking("Both ChatGPT and Gemini have answered. You can review both or ask me to summarize."),
+                coreMode = AiCoreMode.SPEAKING,
+                lastJarvisResponse = "ChatGPT and Gemini comparison complete."
             )
 
-            speak(toolResult.spokenResponse)
+            speak("Both ChatGPT and Gemini have answered. You can compare or ask me to summarize.")
+        }
+    }
+
+    fun summarizeCompareResponses() {
+        viewModelScope.launch {
+            val chatGptAns = _uiState.value.compareChatGptResponse
+            val geminiAns = _uiState.value.compareGeminiResponse
+            val query = _uiState.value.compareQuery
+
+            if (chatGptAns.isBlank() && geminiAns.isBlank()) {
+                speak("Pehle koi question compare karein.")
+                return@launch
+            }
+
+            _uiState.value = _uiState.value.copy(
+                assistantState = JarvisState.Thinking("Summarizing both responses..."),
+                coreMode = AiCoreMode.THINKING
+            )
+
+            val summaryPrompt = """
+                Question: $query
+                ChatGPT Answer: $chatGptAns
+                Gemini Answer: $geminiAns
+                
+                Please summarize both answers into a concise, unified conclusion in 2-3 sentences in natural ${_uiState.value.speechLanguage}.
+            """.trimIndent()
+
+            var summary = ""
+            if (_uiState.value.geminiApiKey.isNotBlank()) {
+                val res = geminiClient.queryAi(summaryPrompt, "You are JARVIS V3 synthesizer.")
+                if (res is AiResponse.Success) summary = res.text
+            } else if (_uiState.value.chatGptApiKey.isNotBlank()) {
+                val res = openAiClient.queryAi(summaryPrompt, "You are JARVIS V3 synthesizer.")
+                if (res is AiResponse.Success) summary = res.text
+            } else {
+                summary = "Dono AI models ne milte julte results diye hain. ChatGPT aur Gemini dono answer provide kar chuke hain."
+            }
+
+            _uiState.value = _uiState.value.copy(
+                compareSummaryResponse = summary,
+                assistantState = JarvisState.Speaking(summary),
+                coreMode = AiCoreMode.SPEAKING,
+                lastJarvisResponse = summary
+            )
+
+            speak(summary)
         }
     }
 
     private suspend fun handleCallIntent(intent: JarvisIntent.MakeCall) {
-        if (intent.isConfirmed) {
-            // Already confirmed, place call immediately
-            executeCallDirectly(intent.contactName, intent.phoneNumber ?: "")
-            return
-        }
-
         val queryName = intent.contactName
         val matches = ContactResolver.resolveContacts(getApplication(), queryName)
-        val exactMatches = matches.filter { it.name.equals(queryName.trim(), ignoreCase = true) }
 
         when {
-            exactMatches.size == 1 -> {
-                proceedWithResolvedContact(exactMatches[0])
-            }
-
             matches.size > 1 -> {
-                // Ambiguous Contact Case: NEVER call silently!
-                val candidateNames = matches.joinToString(" ya ") { it.name }
-                val spoken = "Kaunsa contact? $candidateNames?"
+                // Section 5: Multiple contacts with same name:
+                // "Do Abdul contacts mile hain. Kaun sa?" Then show selectable contacts.
+                val countText = when (matches.size) {
+                    2 -> "Do"
+                    3 -> "Teen"
+                    4 -> "Chaar"
+                    else -> "${matches.size}"
+                }
+                val spoken = "$countText $queryName contacts mile hain. Kaun sa?"
                 val disambig = ContactDisambiguationPending(
                     queryName = queryName,
                     candidates = matches,
@@ -476,22 +829,13 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             matches.size == 1 -> {
-                val match = matches[0]
-                proceedWithResolvedContact(match)
+                proceedWithResolvedContact(matches[0])
             }
 
             else -> {
-                // Contact not found
-                val notFoundMsg = "Mujhe '$queryName' naam ka koi contact nahi mila. Kya phone dialer open karun?"
-                _uiState.value = _uiState.value.copy(
-                    disambiguationPending = null,
-                    confirmationPending = null,
-                    assistantState = JarvisState.Error(notFoundMsg),
-                    coreMode = AiCoreMode.ERROR,
-                    lastJarvisResponse = notFoundMsg,
-                    lastToolUsed = "CallTool"
-                )
-                speak(notFoundMsg)
+                val notFoundMsg = "Mujhe '$queryName' naam ka koi contact nahi mila. Phone dialer open kar raha hoon."
+                actionPlanner.planAndExecute(JarvisIntent.OpenApp(com.example.engine.AppTarget.PHONE, "Phone"))
+                recordHistoryAndSpeak(intent.contactName, notFoundMsg, "CallTool", "System", false)
             }
         }
     }
@@ -499,14 +843,13 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun proceedWithResolvedContact(match: ContactMatch) {
         val isTrustedCalling = _uiState.value.isTrustedCallingEnabled
         val isContactTrusted = match.isTrusted || contactDao.getTrustedContactByName(match.name) != null
+        val isVoiceVerified = _uiState.value.isVoiceBiometricVerified
 
-        if (isTrustedCalling && isContactTrusted) {
-            // Trusted-Contact Calling enabled: Initiate call directly without extra confirmation!
+        if (isVoiceVerified || (isTrustedCalling && isContactTrusted)) {
             executeCallDirectly(match.name, match.number)
         } else {
-            // Confirmation Required
-            val confirmSpoken = "${match.name} ko call lagau?"
-            val confirmMsg = "Do you want JARVIS to call ${match.name} (${match.number})?"
+            val confirmSpoken = "Calling ${match.name}?"
+            val confirmMsg = "Call ${match.name} (${match.number})?"
             val callIntent = JarvisIntent.MakeCall(
                 contactName = match.name,
                 phoneNumber = match.number,
@@ -566,60 +909,71 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                 )
             )
 
-            historyDao.insert(
-                CommandHistoryEntity(
-                    userQuery = "Call $contactName",
-                    jarvisResponse = result.spokenResponse,
-                    toolUsed = "CallTool",
-                    success = result.success
-                )
+            recordHistoryAndSpeak(
+                query = "Call $contactName",
+                response = result.spokenResponse,
+                toolUsed = "CallTool",
+                aiUsed = "System",
+                success = result.success
             )
-
-            _uiState.value = _uiState.value.copy(
-                lastJarvisResponse = result.spokenResponse,
-                assistantState = JarvisState.Speaking(result.spokenResponse),
-                coreMode = AiCoreMode.SPEAKING
-            )
-            speak(result.spokenResponse)
         }
     }
 
-    private suspend fun handleWhatsAppIntent(intent: JarvisIntent.OpenWhatsApp) {
-        val target = intent.contactName
-        if (target.isNullOrBlank()) {
-            executeWhatsAppDirectly(intent.copy(isConfirmed = true))
-            return
-        }
+    private fun handleSmsConfirmation(intent: JarvisIntent.SendSms) {
+        val contact = intent.contactName ?: "Contact"
+        val msg = intent.message ?: ""
+        val confirmSpoken = "Send message to $contact: '$msg'?"
+        val confirmedIntent = intent.copy(isConfirmed = true)
 
-        // Find contact
-        val matches = ContactResolver.resolveContacts(getApplication(), target)
-        val resolvedMatch = matches.firstOrNull { it.name.equals(target, ignoreCase = true) }
-            ?: matches.firstOrNull()
-
-        val contactName = resolvedMatch?.name ?: target
-        val displayPhone = resolvedMatch?.number?.let { " ($it)" } ?: ""
-        val confirmTitle = "Confirm WhatsApp"
-        val confirmMsg = if (!intent.message.isNullOrBlank()) {
-            "Do you want JARVIS to send message to $contactName$displayPhone:\n'${intent.message}'?"
-        } else {
-            "Do you want JARVIS to open WhatsApp for $contactName$displayPhone?"
-        }
-        val confirmSpoken = if (!intent.message.isNullOrBlank()) {
-            "$contactName ko ye message bhejun: '${intent.message}'?"
-        } else {
-            "$contactName ke sath WhatsApp open karun?"
-        }
-
-        val confirmedIntent = intent.copy(contactName = contactName, isConfirmed = true)
         _uiState.value = _uiState.value.copy(
             confirmationPending = PendingConfirmation(
-                title = confirmTitle,
-                message = confirmMsg,
+                title = "Review Message -> Send",
+                message = "Send to $contact:\n\n“$msg”",
+                intent = confirmedIntent,
+                onConfirm = { executeSmsDirectly(confirmedIntent) }
+            ),
+            assistantState = JarvisState.ConfirmationNeeded(
+                confirmationTitle = "Review Message",
+                confirmationMessage = confirmSpoken,
+                pendingIntent = confirmedIntent,
+                confirmAction = { executeSmsDirectly(confirmedIntent) },
+                cancelAction = { cancelConfirmation() }
+            ),
+            coreMode = AiCoreMode.CONFIRMING,
+            lastJarvisResponse = confirmSpoken,
+            lastToolUsed = "SmsTool"
+        )
+        speak(confirmSpoken)
+    }
+
+    private fun executeSmsDirectly(intent: JarvisIntent.SendSms) {
+        _uiState.value = _uiState.value.copy(confirmationPending = null)
+        viewModelScope.launch {
+            val res = actionPlanner.planAndExecute(intent)
+            recordHistoryAndSpeak(
+                query = "Message ${intent.contactName}: ${intent.message}",
+                response = res.spokenResponse,
+                toolUsed = "SmsTool",
+                aiUsed = "System",
+                success = res.success
+            )
+        }
+    }
+
+    private fun handleWhatsAppConfirmation(intent: JarvisIntent.OpenWhatsApp) {
+        val target = intent.contactName ?: "Contact"
+        val confirmSpoken = "$target ko message bhejun: '${intent.message}'?"
+        val confirmedIntent = intent.copy(isConfirmed = true)
+
+        _uiState.value = _uiState.value.copy(
+            confirmationPending = PendingConfirmation(
+                title = "Review WhatsApp Message",
+                message = "Send to $target:\n'${intent.message}'",
                 intent = confirmedIntent,
                 onConfirm = { executeWhatsAppDirectly(confirmedIntent) }
             ),
             assistantState = JarvisState.ConfirmationNeeded(
-                confirmationTitle = confirmTitle,
+                confirmationTitle = "Confirm WhatsApp",
                 confirmationMessage = confirmSpoken,
                 pendingIntent = confirmedIntent,
                 confirmAction = { executeWhatsAppDirectly(confirmedIntent) },
@@ -635,26 +989,14 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     private fun executeWhatsAppDirectly(intent: JarvisIntent.OpenWhatsApp) {
         _uiState.value = _uiState.value.copy(confirmationPending = null)
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                assistantState = JarvisState.Executing("Opening WhatsApp"),
-                coreMode = AiCoreMode.EXECUTING
+            val res = actionPlanner.planAndExecute(intent)
+            recordHistoryAndSpeak(
+                query = "WhatsApp ${intent.contactName}",
+                response = res.spokenResponse,
+                toolUsed = "WhatsAppTool",
+                aiUsed = "System",
+                success = res.success
             )
-            val result = actionPlanner.planAndExecute(intent)
-            historyDao.insert(
-                CommandHistoryEntity(
-                    userQuery = if (!intent.contactName.isNullOrBlank()) "WhatsApp ${intent.contactName}" else "Open WhatsApp",
-                    jarvisResponse = result.spokenResponse,
-                    toolUsed = "WhatsAppTool",
-                    success = result.success
-                )
-            )
-            _uiState.value = _uiState.value.copy(
-                lastJarvisResponse = result.spokenResponse,
-                lastToolUsed = "WhatsAppTool",
-                assistantState = if (result.success) JarvisState.Speaking(result.spokenResponse) else JarvisState.Error(result.spokenResponse),
-                coreMode = if (result.success) AiCoreMode.SPEAKING else AiCoreMode.ERROR
-            )
-            speak(result.spokenResponse)
         }
     }
 
@@ -665,6 +1007,36 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
             coreMode = AiCoreMode.IDLE
         )
         speak("Action cancel kar diya gaya hai.")
+    }
+
+    private fun recordHistoryAndSpeak(
+        query: String,
+        response: String,
+        toolUsed: String,
+        aiUsed: String,
+        success: Boolean
+    ) {
+        viewModelScope.launch {
+            historyDao.insert(
+                CommandHistoryEntity(
+                    userQuery = query,
+                    jarvisResponse = response,
+                    toolUsed = toolUsed,
+                    aiUsed = aiUsed,
+                    success = success
+                )
+            )
+
+            _uiState.value = _uiState.value.copy(
+                lastJarvisResponse = response,
+                lastToolUsed = toolUsed,
+                lastAiEngineUsed = aiUsed,
+                assistantState = if (success) JarvisState.Speaking(response) else JarvisState.Error(response),
+                coreMode = if (success) AiCoreMode.SPEAKING else AiCoreMode.ERROR
+            )
+
+            speak(response)
+        }
     }
 
     fun speak(text: String) {
@@ -678,6 +1050,92 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
             coreMode = AiCoreMode.IDLE,
             isSpeaking = false
         )
+    }
+
+    fun saveApiKeys(chatGptKey: String, geminiKey: String) {
+        viewModelScope.launch {
+            memoryDao.insertOrUpdate(MemoryEntity(key = "chatgpt_api_key", value = chatGptKey, category = "config"))
+            memoryDao.insertOrUpdate(MemoryEntity(key = "gemini_api_key", value = geminiKey, category = "config"))
+            openAiClient.updateApiKey(chatGptKey)
+            geminiClient.updateApiKey(geminiKey)
+            _uiState.value = _uiState.value.copy(chatGptApiKey = chatGptKey, geminiApiKey = geminiKey)
+        }
+    }
+
+    fun saveAiEngine(engine: ActiveAiEngine) {
+        viewModelScope.launch {
+            memoryDao.insertOrUpdate(MemoryEntity(key = "default_ai_engine", value = engine.name, category = "config"))
+            _uiState.value = _uiState.value.copy(activeAiEngine = engine)
+        }
+    }
+
+    fun updateVoiceParams(rate: Float, pitch: Float, language: String) {
+        ttsManager?.speechRate = rate
+        ttsManager?.speechPitch = pitch
+        ttsManager?.setLanguage(if (language.equals("Hindi", true)) "hi" else if (language.equals("English", true)) "en" else "auto")
+        _uiState.value = _uiState.value.copy(speechRate = rate, speechPitch = pitch, speechLanguage = language)
+        viewModelScope.launch {
+            memoryDao.insertOrUpdate(MemoryEntity(key = "voice_rate", value = rate.toString(), category = "config"))
+            memoryDao.insertOrUpdate(MemoryEntity(key = "voice_pitch", value = pitch.toString(), category = "config"))
+            memoryDao.insertOrUpdate(MemoryEntity(key = "language", value = language, category = "config"))
+        }
+    }
+
+    fun toggleWakeWord(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(isWakeWordActive = enabled)
+        if (enabled) {
+            JarvisForegroundService.startService(getApplication())
+        } else {
+            JarvisForegroundService.stopService(getApplication())
+        }
+    }
+
+    fun toggleConversationMode(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(isConversationModeEnabled = enabled)
+        viewModelScope.launch {
+            memoryDao.insertOrUpdate(MemoryEntity(key = "conversation_mode_enabled", value = enabled.toString(), category = "config"))
+        }
+    }
+
+    fun toggleConfirmationMode(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(isConfirmationModeEnabled = enabled)
+        viewModelScope.launch {
+            memoryDao.insertOrUpdate(MemoryEntity(key = "confirmation_mode_enabled", value = enabled.toString(), category = "config"))
+        }
+    }
+
+    fun toggleMemory(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(isMemoryEnabled = enabled)
+        viewModelScope.launch {
+            memoryDao.insertOrUpdate(MemoryEntity(key = "memory_enabled", value = enabled.toString(), category = "config"))
+        }
+    }
+
+    fun clearAllHistory() {
+        viewModelScope.launch {
+            historyDao.clearHistory()
+        }
+    }
+
+    fun clearAllMemory() {
+        viewModelScope.launch {
+            memoryDao.clearAll()
+        }
+    }
+
+    fun saveMemory(key: String, value: String, category: String) {
+        viewModelScope.launch {
+            memoryDao.insertOrUpdate(MemoryEntity(key = key, value = value, category = category))
+            if (key == "user_name") {
+                _uiState.value = _uiState.value.copy(userName = value)
+            }
+        }
+    }
+
+    fun deleteMemory(key: String) {
+        viewModelScope.launch {
+            memoryDao.deleteByKey(key)
+        }
     }
 
     fun addContact(name: String, phone: String, relationship: String, isTrusted: Boolean) {
@@ -708,28 +1166,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     fun toggleTrustedCallingEnabled(enabled: Boolean) {
         _uiState.value = _uiState.value.copy(isTrustedCallingEnabled = enabled)
         viewModelScope.launch {
-            memoryDao.insertOrUpdate(
-                MemoryEntity(
-                    key = "trusted_calling_enabled",
-                    value = enabled.toString(),
-                    category = "config"
-                )
-            )
-        }
-    }
-
-    fun saveMemory(key: String, value: String, category: String) {
-        viewModelScope.launch {
-            memoryDao.insertOrUpdate(MemoryEntity(key = key, value = value, category = category))
-            if (key == "user_name") {
-                _uiState.value = _uiState.value.copy(userName = value)
-            }
-        }
-    }
-
-    fun deleteMemory(key: String) {
-        viewModelScope.launch {
-            memoryDao.deleteByKey(key)
+            memoryDao.insertOrUpdate(MemoryEntity(key = "trusted_calling_enabled", value = enabled.toString(), category = "config"))
         }
     }
 
@@ -763,42 +1200,28 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         processInput("Jarvis, ${routine.triggerPhrase}")
     }
 
-    fun updateApiKey(newKey: String) {
-        viewModelScope.launch {
-            memoryDao.insertOrUpdate(MemoryEntity(key = "api_key", value = newKey, category = "config"))
-            geminiClient.updateApiKey(newKey)
-            _uiState.value = _uiState.value.copy(apiKey = newKey)
-        }
-    }
-
-    fun updateVoiceParams(rate: Float, pitch: Float) {
-        ttsManager?.speechRate = rate
-        ttsManager?.speechPitch = pitch
-        _uiState.value = _uiState.value.copy(speechRate = rate, speechPitch = pitch)
-        viewModelScope.launch {
-            memoryDao.insertOrUpdate(MemoryEntity(key = "voice_rate", value = rate.toString(), category = "config"))
-            memoryDao.insertOrUpdate(MemoryEntity(key = "voice_pitch", value = pitch.toString(), category = "config"))
-        }
-    }
-
-    fun toggleWakeWord(enabled: Boolean) {
-        _uiState.value = _uiState.value.copy(isWakeWordActive = enabled)
-        if (enabled) {
-            JarvisForegroundService.startService(getApplication())
-        } else {
-            JarvisForegroundService.stopService(getApplication())
-        }
-    }
-
-    fun completeSetup(name: String, language: String, pitch: Float, speed: Float) {
+    fun completeSetup(name: String, language: String, pitch: Float, speed: Float, chatGptKey: String, geminiKey: String) {
         viewModelScope.launch {
             memoryDao.insertOrUpdate(MemoryEntity(key = "user_name", value = name, category = "profile"))
             memoryDao.insertOrUpdate(MemoryEntity(key = "language", value = language, category = "profile"))
             memoryDao.insertOrUpdate(MemoryEntity(key = "setup_completed", value = "true", category = "config"))
-            updateVoiceParams(speed, pitch)
-            _uiState.value = _uiState.value.copy(userName = name, isSetupComplete = true)
+            if (chatGptKey.isNotBlank()) {
+                memoryDao.insertOrUpdate(MemoryEntity(key = "chatgpt_api_key", value = chatGptKey, category = "config"))
+                openAiClient.updateApiKey(chatGptKey)
+            }
+            if (geminiKey.isNotBlank()) {
+                memoryDao.insertOrUpdate(MemoryEntity(key = "gemini_api_key", value = geminiKey, category = "config"))
+                geminiClient.updateApiKey(geminiKey)
+            }
+            updateVoiceParams(speed, pitch, language)
+            _uiState.value = _uiState.value.copy(
+                userName = name,
+                chatGptApiKey = chatGptKey,
+                geminiApiKey = geminiKey,
+                isSetupComplete = true
+            )
             _currentScreen.value = ScreenNav.MAIN
-            speak("Ji $name! Main JARVIS hoon. Setup complete ho gaya hai. Main aapki kya madad kar sakta hoon?")
+            speak("Hello. I am JARVIS, your personal AI assistant. I'm ready to help.")
         }
     }
 

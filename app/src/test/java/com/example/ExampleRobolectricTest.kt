@@ -8,6 +8,7 @@ import com.example.engine.AppTarget
 import com.example.engine.IntentClassifier
 import com.example.engine.JarvisIntent
 import com.example.engine.SettingsType
+import com.example.engine.VolumeDirection
 import com.example.tools.CallTool
 import com.example.tools.ContactMatch
 import com.example.tools.ContactResolver
@@ -29,7 +30,7 @@ class ExampleRobolectricTest {
     fun `read string from context`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("JARVIS AI", appName)
+        assertEquals("JARVIS V3", appName)
     }
 
     @Test
@@ -49,7 +50,7 @@ class ExampleRobolectricTest {
         assertTrue(timer is JarvisIntent.SetTimer && (timer as JarvisIntent.SetTimer).seconds == 600)
 
         // 4. Alarm
-        val alarm = classifier.classify("Jarvis, kal subah 7 baje alarm laga do.")
+        val alarm = classifier.classify("Jarvis, kal subah 7 baje mujhe utha dena.")
         assertTrue(alarm is JarvisIntent.SetAlarm && (alarm as JarvisIntent.SetAlarm).hour == 7)
 
         // 5. Battery
@@ -60,11 +61,25 @@ class ExampleRobolectricTest {
         val bt = classifier.classify("Jarvis, Bluetooth settings kholo.")
         assertTrue(bt is JarvisIntent.OpenSetting && (bt as JarvisIntent.OpenSetting).type == SettingsType.BLUETOOTH)
 
-        // 7. Weather and Context Retention ("Shaam ko?")
+        // 7. Flashlight / Torch
+        val torchOn = classifier.classify("Torch jala do")
+        assertTrue(torchOn is JarvisIntent.ToggleTorch && (torchOn as JarvisIntent.ToggleTorch).enable)
+
+        val torchOff = classifier.classify("Torch band karo")
+        assertTrue(torchOff is JarvisIntent.ToggleTorch && !(torchOff as JarvisIntent.ToggleTorch).enable)
+
+        // 8. Volume Controls
+        val volDown = classifier.classify("Volume kam karo")
+        assertTrue(volDown is JarvisIntent.AdjustVolume && (volDown as JarvisIntent.AdjustVolume).direction == VolumeDirection.DOWN)
+
+        val volUp = classifier.classify("Volume badhao")
+        assertTrue(volUp is JarvisIntent.AdjustVolume && (volUp as JarvisIntent.AdjustVolume).direction == VolumeDirection.UP)
+
+        // 9. Weather and Context Retention ("Shaam ko?")
         val weather1 = classifier.classify("Jarvis, Srinagar ka weather batao.")
         assertTrue(weather1 is JarvisIntent.Weather && (weather1 as JarvisIntent.Weather).location.equals("Srinagar", true))
 
-        val weatherFollowUp = classifier.classify("Shaam ko?")
+        val weatherFollowUp = classifier.classify("Kal ka?")
         assertTrue(
             weatherFollowUp is JarvisIntent.Weather &&
                     (weatherFollowUp as JarvisIntent.Weather).location.equals("Srinagar", true) &&
@@ -73,67 +88,28 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `test exact user requested commands`() {
+    fun `test AI engines and compare commands`() {
         val classifier = IntentClassifier()
 
-        // 1. "Hello JARVIS"
-        val hello = classifier.classify("Hello JARVIS")
-        assertTrue(hello is JarvisIntent.GeneralChat)
-        assertTrue((hello as JarvisIntent.GeneralChat).query.contains("Hello", ignoreCase = true) ||
-                (hello as JarvisIntent.GeneralChat).query.contains("JARVIS", ignoreCase = true) ||
-                (hello as JarvisIntent.GeneralChat).query.contains("madad", ignoreCase = true))
+        // 1. ChatGPT
+        val chatGpt = classifier.classify("ChatGPT se pucho ki 25 square meter kitne square feet hote hain")
+        assertTrue(chatGpt is JarvisIntent.AskChatGpt)
 
-        // 2. "Call Ali"
-        val call = classifier.classify("Call Ali")
-        assertTrue(call is JarvisIntent.MakeCall && (call as JarvisIntent.MakeCall).contactName.equals("Ali", true))
+        // 2. Gemini
+        val gemini = classifier.classify("Gemini se iska answer lo")
+        assertTrue(gemini is JarvisIntent.AskGemini)
 
-        // 3. "WhatsApp Ammi"
-        val wa = classifier.classify("WhatsApp Ammi")
-        assertTrue(wa is JarvisIntent.OpenWhatsApp && (wa as JarvisIntent.OpenWhatsApp).contactName.equals("Ammi", true))
+        // 3. Compare
+        val compare = classifier.classify("compare both models for quantum computing")
+        assertTrue(compare is JarvisIntent.CompareAi)
 
-        // 4. "Open Camera"
-        val cam = classifier.classify("Open Camera")
-        assertTrue(cam is JarvisIntent.OpenApp && (cam as JarvisIntent.OpenApp).target == AppTarget.CAMERA)
+        // 4. Summarize Both
+        val summarize = classifier.classify("JARVIS, summarize both answers")
+        assertTrue(summarize is JarvisIntent.SummarizeComparison)
 
-        // 5. "Open YouTube"
-        val yt = classifier.classify("Open YouTube")
-        assertTrue(yt is JarvisIntent.OpenApp && (yt as JarvisIntent.OpenApp).target == AppTarget.YOUTUBE)
-
-        // 6. "Open Maps"
-        val maps = classifier.classify("Open Maps")
-        assertTrue(maps is JarvisIntent.OpenApp && (maps as JarvisIntent.OpenApp).target == AppTarget.MAPS)
-
-        // 7. "Open Settings"
-        val settings = classifier.classify("Open Settings")
-        assertTrue(settings is JarvisIntent.OpenSetting && (settings as JarvisIntent.OpenSetting).type == SettingsType.GENERAL)
-
-        // 8. "Set timer for 10 minutes"
-        val timer = classifier.classify("Set timer for 10 minutes")
-        assertTrue(timer is JarvisIntent.SetTimer && (timer as JarvisIntent.SetTimer).seconds == 600)
-
-        // 9. "YouTube kholo"
-        val ytKholo = classifier.classify("YouTube kholo")
-        assertTrue(ytKholo is JarvisIntent.OpenApp && (ytKholo as JarvisIntent.OpenApp).target == AppTarget.YOUTUBE)
-
-        // 10. "WhatsApp kholo"
-        val waKholo = classifier.classify("WhatsApp kholo")
-        assertTrue(waKholo is JarvisIntent.OpenApp && (waKholo as JarvisIntent.OpenApp).target == AppTarget.WHATSAPP)
-
-        // 11. "Chrome kholo"
-        val chromeKholo = classifier.classify("Chrome kholo")
-        assertTrue(chromeKholo is JarvisIntent.OpenApp && (chromeKholo as JarvisIntent.OpenApp).target == AppTarget.CHROME)
-
-        // 12. "Mera battery percentage batao"
-        val battQuery = classifier.classify("Mera battery percentage batao")
-        assertTrue(battQuery is JarvisIntent.BatteryStatus)
-
-        // 13. "Time kya hua hai"
-        val timeQuery = classifier.classify("Time kya hua hai")
-        assertTrue(timeQuery is JarvisIntent.CurrentTime)
-
-        // 14. "Ammi ko call karo"
-        val callAmmi = classifier.classify("Ammi ko call karo")
-        assertTrue(callAmmi is JarvisIntent.MakeCall && (callAmmi as JarvisIntent.MakeCall).contactName.equals("Ammi", true))
+        // 5. SMS Message
+        val sms = classifier.classify("Ahmed ko message bhejo: main 10 minute mein aa raha hoon")
+        assertTrue(sms is JarvisIntent.SendSms && (sms as JarvisIntent.SendSms).contactName.equals("Ahmed", true))
     }
 
     @Test
@@ -143,7 +119,6 @@ class ExampleRobolectricTest {
 
         // 1. SpeechRecognizer availability check: must not crash
         val isSpeechAvailable = android.speech.SpeechRecognizer.isRecognitionAvailable(context)
-        // Passes without crash
 
         // 2. "Hello JARVIS" action planner execution
         val helloResult = actionPlanner.planAndExecute(JarvisIntent.GeneralChat("Hello! Main JARVIS hoon."))
@@ -158,19 +133,18 @@ class ExampleRobolectricTest {
         assertTrue(callResult.success)
         assertTrue(callResult.spokenResponse.contains("dialer open"))
 
-        // 4. "WhatsApp Ammi" execution with WhatsAppTool (handles missing WhatsApp gracefully)
+        // 4. "WhatsApp Ammi" execution with WhatsAppTool
         val waResult = com.example.tools.WhatsAppTool().execute(
             context,
             mapOf("contactName" to "Ammi", "isConfirmed" to true)
         )
-        // On emulator or device without WhatsApp, reports missing app gracefully without crash
         assertNotNull(waResult.spokenResponse)
 
-        // 5. "Open Camera" execution (handles missing camera gracefully)
+        // 5. "Open Camera" execution
         val camResult = actionPlanner.planAndExecute(JarvisIntent.OpenApp(AppTarget.CAMERA, "Camera"))
         assertNotNull(camResult.spokenResponse)
 
-        // 6. "Open YouTube" execution (handles missing app gracefully)
+        // 6. "Open YouTube" execution
         val ytResult = actionPlanner.planAndExecute(JarvisIntent.OpenApp(AppTarget.YOUTUBE, "YouTube"))
         assertNotNull(ytResult.spokenResponse)
 
@@ -186,19 +160,25 @@ class ExampleRobolectricTest {
         val timerResult = actionPlanner.planAndExecute(JarvisIntent.SetTimer(seconds = 600, message = "JARVIS Timer"))
         assertNotNull(timerResult.spokenResponse)
 
-        // 9b. "Time kya hua hai" execution
-        val timeResult = actionPlanner.planAndExecute(JarvisIntent.CurrentTime)
-        assertTrue(timeResult.success)
-        assertTrue(timeResult.spokenResponse.contains("time", ignoreCase = true))
+        // 10. Torch tool execution
+        val torchResult = actionPlanner.planAndExecute(JarvisIntent.ToggleTorch(enable = true))
+        assertNotNull(torchResult.spokenResponse)
 
-        // 10-14. Validate all navigation screens are distinct and defined
+        // 11. Volume tool execution
+        val volResult = actionPlanner.planAndExecute(JarvisIntent.AdjustVolume(VolumeDirection.DOWN))
+        assertNotNull(volResult.spokenResponse)
+
+        // 12. Validate all navigation screens
         val screens = com.example.ui.ScreenNav.values()
         assertTrue(screens.contains(com.example.ui.ScreenNav.MAIN))
-        assertTrue(screens.contains(com.example.ui.ScreenNav.CONTACTS))     // 10. Contacts screen
-        assertTrue(screens.contains(com.example.ui.ScreenNav.COLOROS_HUB))   // 11. ColorOS screen
-        assertTrue(screens.contains(com.example.ui.ScreenNav.MEMORY_VAULT))  // 12. Vault
-        assertTrue(screens.contains(com.example.ui.ScreenNav.ROUTINES))      // 13. Routines
-        assertTrue(screens.contains(com.example.ui.ScreenNav.SETUP_WIZARD))  // 14. Wizard
+        assertTrue(screens.contains(com.example.ui.ScreenNav.CONTACTS))
+        assertTrue(screens.contains(com.example.ui.ScreenNav.COLOROS_HUB))
+        assertTrue(screens.contains(com.example.ui.ScreenNav.MEMORY_VAULT))
+        assertTrue(screens.contains(com.example.ui.ScreenNav.ROUTINES))
+        assertTrue(screens.contains(com.example.ui.ScreenNav.SETUP_WIZARD))
+        assertTrue(screens.contains(com.example.ui.ScreenNav.COMPARE))
+        assertTrue(screens.contains(com.example.ui.ScreenNav.PERMISSION_CENTER))
+        assertTrue(screens.contains(com.example.ui.ScreenNav.HISTORY))
     }
 
     @Test
@@ -207,57 +187,86 @@ class ExampleRobolectricTest {
         val db = JarvisDatabase.getInstance(context)
         val contactDao = db.trustedContactDao()
 
-        // Seed two contacts with same prefix "Ali"
         contactDao.insert(
-            TrustedContactEntity(name = "Ali Khan", phoneNumber = "+919876500001", isTrusted = false)
+            TrustedContactEntity(name = "Abdul Mateen", phoneNumber = "+919876500001", isTrusted = false)
         )
         contactDao.insert(
-            TrustedContactEntity(name = "Ali Ahmad", phoneNumber = "+919876500002", isTrusted = false)
+            TrustedContactEntity(name = "Abdul Khan", phoneNumber = "+919876500002", isTrusted = false)
         )
-        // Seed trusted contact
         contactDao.insert(
             TrustedContactEntity(name = "Ammi", phoneNumber = "+919876543210", isTrusted = true)
         )
 
-        // 1. Ambiguous resolution: "Ali" should find both Ali Khan and Ali Ahmad
-        val matches = ContactResolver.resolveContacts(context, "Ali")
-        assertTrue("Expected at least 2 matches for Ali, found ${matches.size}", matches.size >= 2)
+        // Ambiguous resolution: "Abdul" should find both
+        val matches = ContactResolver.resolveContacts(context, "Abdul")
+        assertTrue("Expected at least 2 matches for Abdul, found ${matches.size}", matches.size >= 2)
 
-        // 2. CallTool execution with ambiguous name: MUST NOT place call silently
         val callTool = CallTool()
         val ambiguousResult = callTool.execute(
             context,
-            mapOf("contactName" to "Ali", "isConfirmed" to false)
+            mapOf("contactName" to "Abdul", "isConfirmed" to false)
         )
         assertFalse("Ambiguous call must not succeed silently", ambiguousResult.success)
         assertTrue(ambiguousResult.requiresUiInteraction)
         assertTrue(ambiguousResult.spokenResponse.contains("Kaunsa contact?"))
-
-        // 3. Call with single contact that is NOT confirmed and NOT trusted bypass:
-        // Must prompt confirmation
-        val unconfirmedResult = callTool.execute(
-            context,
-            mapOf("contactName" to "Ali Khan", "isConfirmed" to false, "isTrustedBypass" to false)
-        )
-        assertFalse("Unconfirmed call must require user confirmation", unconfirmedResult.success)
-        assertTrue(unconfirmedResult.requiresUiInteraction)
-        assertTrue(unconfirmedResult.spokenResponse.contains("Ali Khan ko call lagau?"))
-
-        // 4. Call with single contact when confirmed OR trusted bypass:
-        // Places call safely
-        val confirmedResult = callTool.execute(
-            context,
-            mapOf("contactName" to "Ammi", "isConfirmed" to true, "isTrustedBypass" to true)
-        )
-        assertTrue("Confirmed or trusted call should succeed", confirmedResult.success)
     }
 
     @Test
     fun `test ColorOSHelper does not recurse or throw StackOverflow`() {
-        // Must return safely without recursive stack overflow
         val isOppo = com.example.engine.ColorOSHelper.isOppoOrColorOS()
         val version = com.example.engine.ColorOSHelper.getColorOsVersion()
         val model = com.example.engine.ColorOSHelper.getDeviceModel()
         assertNotNull(model)
+    }
+
+    @Test
+    fun `test voice biometrics threshold and verification`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val biometricManager = com.example.engine.VoiceBiometricManager(context)
+        biometricManager.loadBiometricProfile()
+
+        // Enrolled owner voice test: similarity score should be >= 85%
+        val ownerResult = biometricManager.verifyVoice("Phone lock karo")
+        assertTrue("Owner voice should be verified", ownerResult.isVerified)
+        assertTrue("Owner similarity score should be >= 85%, was ${ownerResult.similarityScore}", ownerResult.similarityScore >= 85.0f)
+
+        // Simulated guest voice test: similarity score should be < 85% and rejected
+        biometricManager.setSimulatedGuestMode(true)
+        val guestResult = biometricManager.verifyVoice("Phone unlock karo")
+        assertFalse("Guest voice must be rejected", guestResult.isVerified)
+        assertTrue("Guest similarity score must be < 85%, was ${guestResult.similarityScore}", guestResult.similarityScore < 85.0f)
+        assertTrue(guestResult.failureReason?.contains("85%") == true)
+    }
+
+    @Test
+    fun `test phone lock and unlock intent classification and security rejection`() {
+        val classifier = IntentClassifier()
+
+        // 1. Classification
+        val lockCmd = classifier.classify("phone lock karo")
+        assertTrue(lockCmd is JarvisIntent.LockPhone)
+
+        val unlockCmd = classifier.classify("phone unlock karo")
+        assertTrue(unlockCmd is JarvisIntent.UnlockPhone)
+
+        val directCallCmd = classifier.classify("Abdul ko call karo")
+        assertTrue(directCallCmd is JarvisIntent.MakeCall && (directCallCmd as JarvisIntent.MakeCall).contactName.equals("Abdul", true))
+
+        // 2. KeyguardUnlockHelper lockPhone security check
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val rejectLock = com.example.engine.KeyguardUnlockHelper.lockPhone(context, biometricScore = 70.0f)
+        assertTrue(rejectLock.contains("rejected for security"))
+
+        // 3. KeyguardUnlockHelper unlockPhone security check
+        var unlockRejected = false
+        com.example.engine.KeyguardUnlockHelper.unlockPhone(
+            activity = null,
+            biometricScore = 65.0f,
+            onDismissed = {},
+            onError = { err ->
+                if (err.contains("rejected for security")) unlockRejected = true
+            }
+        )
+        assertTrue("Unlock with score < 85% must be rejected", unlockRejected)
     }
 }

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.MediaStore
+import android.provider.Settings
 import com.example.engine.AppTarget
 
 class AppLauncherTool : JarvisTool {
@@ -16,6 +17,48 @@ class AppLauncherTool : JarvisTool {
     override suspend fun execute(context: Context, params: Map<String, Any?>): ToolResult {
         val target = params["target"] as? AppTarget ?: AppTarget.UNKNOWN
         val appName = params["appName"] as? String ?: "App"
+
+        if (target == AppTarget.PHONE) {
+            val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            return try {
+                context.startActivity(dialIntent)
+                ToolResult(true, "Phone dialer open kar diya hai.", "Opening Phone Dialer...")
+            } catch (e: Exception) {
+                ToolResult(false, "Dialer open nahi ho saka: ${e.message}", "Failed to open Phone.")
+            }
+        }
+
+        if (target == AppTarget.SETTINGS) {
+            val settingsIntent = Intent(Settings.ACTION_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            return try {
+                context.startActivity(settingsIntent)
+                ToolResult(true, "Settings khol di hai.", "Opening Android Settings...")
+            } catch (e: Exception) {
+                ToolResult(false, "Settings open nahi ho saka.", "Failed to open Settings.")
+            }
+        }
+
+        if (target == AppTarget.MESSAGES) {
+            return try {
+                val smsIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_APP_MESSAGING)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(smsIntent)
+                ToolResult(true, "Messages app open kar diya hai.", "Opening Messages...")
+            } catch (_: Exception) {
+                val fallbackIntent = Intent(Intent.ACTION_VIEW).apply {
+                    data = Uri.parse("sms:")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(fallbackIntent)
+                ToolResult(true, "Messages app open kar diya hai.", "Opening Messages...")
+            }
+        }
 
         val packageName = when (target) {
             AppTarget.YOUTUBE -> "com.google.android.youtube"
@@ -222,7 +265,7 @@ class WebSearchTool : JarvisTool {
             context.startActivity(intent)
             ToolResult(
                 success = true,
-                spokenResponse = "Web par '$query' search kar raha hoon.",
+                spokenResponse = "I'll check the latest information. Web par '$query' search kar raha hoon.",
                 displayMessage = "Searching web for '$query'..."
             )
         } catch (_: Exception) {
@@ -233,7 +276,7 @@ class WebSearchTool : JarvisTool {
             context.startActivity(browserIntent)
             ToolResult(
                 success = true,
-                spokenResponse = "Web browser mein '$query' search kar raha hoon.",
+                spokenResponse = "I'll check the latest information. Browser mein '$query' search kar raha hoon.",
                 displayMessage = "Searching web for '$query'..."
             )
         }

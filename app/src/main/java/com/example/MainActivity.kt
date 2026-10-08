@@ -10,17 +10,19 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import com.example.engine.AppTarget
 import com.example.ui.JarvisViewModel
 import com.example.ui.ScreenNav
 import com.example.ui.screens.AssistantSetupWizard
 import com.example.ui.screens.ColorOSSettingsScreen
+import com.example.ui.screens.CommandHistoryScreen
+import com.example.ui.screens.CompareScreen
+import com.example.ui.screens.ContactManagerScreen
 import com.example.ui.screens.JarvisMainScreen
 import com.example.ui.screens.MemoryManagerScreen
+import com.example.ui.screens.PermissionCenterScreen
 import com.example.ui.screens.RoutinesScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.JarvisBackground
@@ -33,6 +35,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Configure Lock Screen Overlay (Siri-style over lockscreen actions)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        }
+        window.addFlags(
+            android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                    android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
 
         handleLaunchIntent(intent)
 
@@ -70,6 +83,23 @@ fun JarvisAppContent(viewModel: JarvisViewModel) {
     val memories by viewModel.memories.collectAsState()
     val routines by viewModel.routines.collectAsState()
     val contacts by viewModel.contacts.collectAsState()
+
+    // Handle Phone Unlock Event via KeyguardManager dismiss
+    val activity = context as? androidx.activity.ComponentActivity
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        viewModel.unlockEvent.collect { score ->
+            com.example.engine.KeyguardUnlockHelper.unlockPhone(
+                activity = activity,
+                biometricScore = score,
+                onDismissed = {
+                    viewModel.speak("Keyguard dismissed. Screen unlocked.")
+                },
+                onError = { err ->
+                    viewModel.speak(err)
+                }
+            )
+        }
+    }
 
     // Runtime permission launcher for SpeechRecognizer
     val micPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -110,20 +140,6 @@ fun JarvisAppContent(viewModel: JarvisViewModel) {
                 onToggleMic = safeToggleMic,
                 onStopSpeaking = { viewModel.cancelSpeaking() },
                 onSubmitText = { text -> viewModel.processTextInput(text) },
-                onQuickAction = { action ->
-                    when (action.id) {
-                        "talk" -> safeToggleMic()
-                        "call" -> viewModel.processTextInput("Ammi ko call karo")
-                        "whatsapp" -> viewModel.processTextInput("WhatsApp kholo")
-                        "weather" -> viewModel.processTextInput("Srinagar ka weather batao")
-                        "maps" -> viewModel.processTextInput("Google Maps mein ghar ka route dikhao")
-                        "camera" -> viewModel.processTextInput("Camera kholo")
-                        "youtube" -> viewModel.processTextInput("YouTube kholo")
-                        "alarm" -> viewModel.processTextInput("Kal subah 7 baje alarm laga do")
-                        "timer" -> viewModel.processTextInput("10 minute ka timer lagao")
-                        "settings" -> viewModel.processTextInput("Settings kholo")
-                    }
-                },
                 onNavigate = { screen -> viewModel.navigateTo(screen) },
                 onConfirmAction = {
                     val pending = uiState.confirmationPending
@@ -138,12 +154,44 @@ fun JarvisAppContent(viewModel: JarvisViewModel) {
                 },
                 onSimulateVoiceCommand = { cmd ->
                     viewModel.simulateVoiceCommand(cmd)
+                },
+                onToggleSimulatedGuest = { isGuest ->
+                    viewModel.setSimulatedGuestMode(isGuest)
                 }
             )
         }
 
+        ScreenNav.COMPARE -> {
+            CompareScreen(
+                currentQuery = uiState.compareQuery,
+                chatGptResponse = uiState.compareChatGptResponse,
+                geminiResponse = uiState.compareGeminiResponse,
+                summaryResponse = uiState.compareSummaryResponse,
+                isLoading = uiState.isComparing,
+                onCompareQuery = { query -> viewModel.handleCompareAiQuery(query) },
+                onSummarizeBoth = { viewModel.summarizeCompareResponses() },
+                onSpeakText = { text -> viewModel.speak(text) },
+                onStopSpeaking = { viewModel.cancelSpeaking() },
+                onBack = { viewModel.navigateTo(ScreenNav.MAIN) }
+            )
+        }
+
+        ScreenNav.PERMISSION_CENTER -> {
+            PermissionCenterScreen(
+                onBack = { viewModel.navigateTo(ScreenNav.MAIN) }
+            )
+        }
+
+        ScreenNav.HISTORY -> {
+            CommandHistoryScreen(
+                history = commandHistory,
+                onClearHistory = { viewModel.clearAllHistory() },
+                onBack = { viewModel.navigateTo(ScreenNav.MAIN) }
+            )
+        }
+
         ScreenNav.CONTACTS -> {
-            com.example.ui.screens.ContactManagerScreen(
+            ContactManagerScreen(
                 contacts = contacts,
                 isTrustedCallingEnabled = uiState.isTrustedCallingEnabled,
                 onToggleTrustedCalling = { enabled ->
@@ -169,8 +217,8 @@ fun JarvisAppContent(viewModel: JarvisViewModel) {
         ScreenNav.SETUP_WIZARD -> {
             AssistantSetupWizard(
                 initialUserName = uiState.userName,
-                onComplete = { name, lang, pitch, speed ->
-                    viewModel.completeSetup(name, lang, pitch, speed)
+                onComplete = { name, lang, pitch, speed, chatGptKey, geminiKey ->
+                    viewModel.completeSetup(name, lang, pitch, speed, chatGptKey, geminiKey)
                 },
                 onClose = { viewModel.navigateTo(ScreenNav.MAIN) }
             )
@@ -216,14 +264,27 @@ fun JarvisAppContent(viewModel: JarvisViewModel) {
 
         ScreenNav.SETTINGS -> {
             SettingsScreen(
-                currentApiKey = uiState.apiKey,
+                currentChatGptKey = uiState.chatGptApiKey,
+                currentGeminiKey = uiState.geminiApiKey,
+                currentAiEngine = uiState.activeAiEngine,
                 speechRate = uiState.speechRate,
                 speechPitch = uiState.speechPitch,
+                currentLanguage = uiState.speechLanguage,
                 wakeWordEnabled = uiState.isWakeWordActive,
-                onSaveApiKey = { key -> viewModel.updateApiKey(key) },
-                onSaveVoiceParams = { rate, pitch -> viewModel.updateVoiceParams(rate, pitch) },
+                conversationModeEnabled = uiState.isConversationModeEnabled,
+                confirmationModeEnabled = uiState.isConfirmationModeEnabled,
+                memoryEnabled = uiState.isMemoryEnabled,
+                onSaveApiKeys = { chatGpt, gemini -> viewModel.saveApiKeys(chatGpt, gemini) },
+                onSaveAiEngine = { engine -> viewModel.saveAiEngine(engine) },
+                onSaveVoiceParams = { rate, pitch, lang -> viewModel.updateVoiceParams(rate, pitch, lang) },
                 onToggleWakeWord = { enabled -> viewModel.toggleWakeWord(enabled) },
-                onNavigateToContacts = { viewModel.navigateTo(ScreenNav.CONTACTS) },
+                onToggleConversationMode = { enabled -> viewModel.toggleConversationMode(enabled) },
+                onToggleConfirmationMode = { enabled -> viewModel.toggleConfirmationMode(enabled) },
+                onToggleMemory = { enabled -> viewModel.toggleMemory(enabled) },
+                onClearHistory = { viewModel.clearAllHistory() },
+                onClearMemory = { viewModel.clearAllMemory() },
+                onNavigateToPermissions = { viewModel.navigateTo(ScreenNav.PERMISSION_CENTER) },
+                onNavigateToMemoryVault = { viewModel.navigateTo(ScreenNav.MEMORY_VAULT) },
                 onBack = { viewModel.navigateTo(ScreenNav.MAIN) }
             )
         }

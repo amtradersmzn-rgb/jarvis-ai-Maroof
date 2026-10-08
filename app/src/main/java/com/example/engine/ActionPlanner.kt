@@ -11,8 +11,11 @@ import com.example.tools.DeviceSettingsTool
 import com.example.tools.JarvisTool
 import com.example.tools.MapsNavigationTool
 import com.example.tools.NotificationTool
+import com.example.tools.SmsTool
 import com.example.tools.TimerTool
 import com.example.tools.ToolResult
+import com.example.tools.TorchTool
+import com.example.tools.VolumeTool
 import com.example.tools.WeatherTool
 import com.example.tools.WebSearchTool
 import com.example.tools.WhatsAppTool
@@ -23,6 +26,9 @@ class ActionPlanner(private val context: Context) {
         "open_app" to AppLauncherTool(),
         "make_call" to CallTool(),
         "open_whatsapp" to WhatsAppTool(),
+        "send_sms" to SmsTool(),
+        "toggle_torch" to TorchTool(),
+        "adjust_volume" to VolumeTool(),
         "create_alarm" to AlarmTool(),
         "create_timer" to TimerTool(),
         "open_camera" to CameraTool(),
@@ -39,6 +45,22 @@ class ActionPlanner(private val context: Context) {
 
     suspend fun planAndExecute(intent: JarvisIntent): ToolResult {
         return when (intent) {
+            is JarvisIntent.LockPhone -> {
+                val resp = KeyguardUnlockHelper.lockPhone(context, intent.biometricScore)
+                val isSuccess = resp.contains("Phone lock kar diya", true)
+                ToolResult(isSuccess, resp, resp)
+            }
+
+            is JarvisIntent.UnlockPhone -> {
+                if (intent.biometricScore < VoiceBiometricManager.BIOMETRIC_SIMILARITY_THRESHOLD) {
+                    val errMsg = "Voice biometric verification failed (${String.format("%.1f", intent.biometricScore)}% < 85%). Phone unlock action rejected for security."
+                    ToolResult(false, errMsg, errMsg)
+                } else {
+                    val successMsg = "Voice verified (${String.format("%.1f", intent.biometricScore)}%). Dismissing keyguard for Face Unlock."
+                    ToolResult(true, successMsg, successMsg, requiresUiInteraction = true, payload = mapOf("action" to "dismiss_keyguard"))
+                }
+            }
+
             is JarvisIntent.OpenApp -> {
                 val tool = if (intent.target == AppTarget.CAMERA) {
                     tools["open_camera"]
@@ -57,7 +79,8 @@ class ActionPlanner(private val context: Context) {
                         "contactName" to intent.contactName,
                         "phoneNumber" to intent.phoneNumber,
                         "isConfirmed" to intent.isConfirmed,
-                        "isTrustedBypass" to intent.isTrustedBypass
+                        "isTrustedBypass" to intent.isTrustedBypass,
+                        "isVoiceVerified" to intent.isVoiceVerified
                     )
                 ) ?: ToolResult(false, "Call tool unavailable.")
             }
@@ -72,6 +95,31 @@ class ActionPlanner(private val context: Context) {
                         "isConfirmed" to intent.isConfirmed
                     )
                 ) ?: ToolResult(false, "WhatsApp tool unavailable.")
+            }
+
+            is JarvisIntent.SendSms -> {
+                val tool = tools["send_sms"] as? SmsTool
+                tool?.execute(
+                    context,
+                    mapOf(
+                        "contactName" to intent.contactName,
+                        "phoneNumber" to intent.phoneNumber,
+                        "message" to intent.message,
+                        "isConfirmed" to intent.isConfirmed
+                    )
+                ) ?: ToolResult(false, "SMS tool unavailable.")
+            }
+
+            is JarvisIntent.ToggleTorch -> {
+                val tool = tools["toggle_torch"] as? TorchTool
+                tool?.execute(context, mapOf("enable" to intent.enable))
+                    ?: ToolResult(false, "Torch tool unavailable.")
+            }
+
+            is JarvisIntent.AdjustVolume -> {
+                val tool = tools["adjust_volume"] as? VolumeTool
+                tool?.execute(context, mapOf("direction" to intent.direction))
+                    ?: ToolResult(false, "Volume tool unavailable.")
             }
 
             is JarvisIntent.SetAlarm -> {
@@ -155,6 +203,14 @@ class ActionPlanner(private val context: Context) {
                 executeRoutine(intent.routineName)
             }
 
+            is JarvisIntent.SmartHome -> {
+                ToolResult(
+                    success = true,
+                    spokenResponse = "Smart Home module: '${intent.deviceCommand}' command received. Smart home integration connect karne ke liye ready hai.",
+                    displayMessage = "Smart Home: Ready for IoT bridge integration."
+                )
+            }
+
             is JarvisIntent.GeneralChat -> {
                 ToolResult(
                     success = true,
@@ -163,11 +219,16 @@ class ActionPlanner(private val context: Context) {
                 )
             }
 
+            is JarvisIntent.AskChatGpt, is JarvisIntent.AskGemini, is JarvisIntent.CompareAi, is JarvisIntent.SummarizeComparison -> {
+                // Handled directly in ViewModel by AI Engine Manager
+                ToolResult(true, "AI Engine processing...", "AI Engine processing...")
+            }
+
             is JarvisIntent.Unknown -> {
                 ToolResult(
                     success = false,
-                    spokenResponse = "Mujhe samajh nahi aaya. Aap 'weather batao', 'call karo', ya 'WhatsApp kholo' bol sakte hain.",
-                    displayMessage = "Command not recognized. Try asking for weather, calling a contact, or opening an app."
+                    spokenResponse = "Mujhe samajh nahi aaya. Aap 'torch jala do', 'volume kam karo', 'weather batao', ya 'ChatGPT se pucho' bol sakte hain.",
+                    displayMessage = "Command not recognized. Try torch, volume, weather, calling, or asking ChatGPT/Gemini."
                 )
             }
         }
@@ -176,7 +237,6 @@ class ActionPlanner(private val context: Context) {
     private suspend fun executeRoutine(routineName: String): ToolResult {
         return when (routineName.lowercase()) {
             "work mode" -> {
-                // Open WhatsApp or Maps, inform user
                 tools["open_app"]?.execute(context, mapOf("target" to AppTarget.WHATSAPP, "appName" to "WhatsApp"))
                 ToolResult(
                     success = true,
@@ -185,11 +245,10 @@ class ActionPlanner(private val context: Context) {
                 )
             }
             "good night" -> {
-                // Set default alarm for 7:00 AM
                 tools["create_alarm"]?.execute(context, mapOf("hour" to 7, "minute" to 0, "message" to "JARVIS Morning"))
                 ToolResult(
                     success = true,
-                    spokenResponse = "Good night Maroof! Kal subah 7:00 baje ka alarm set kar diya hai. Aaraam karein.",
+                    spokenResponse = "Good night! Kal subah 7:00 baje ka alarm set kar diya hai. Aaraam karein.",
                     displayMessage = "Good Night routine complete: Morning alarm set for 7:00 AM."
                 )
             }

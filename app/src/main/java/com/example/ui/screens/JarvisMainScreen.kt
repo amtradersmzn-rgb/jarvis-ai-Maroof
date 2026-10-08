@@ -1,14 +1,16 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,18 +37,25 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -57,6 +66,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,21 +77,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.CommandHistoryEntity
+import com.example.engine.ActiveAiEngine
 import com.example.engine.AiCoreMode
 import com.example.ui.JarvisUiState
 import com.example.ui.ScreenNav
 import com.example.ui.components.ArcReactorCore
 import com.example.ui.components.AudioWaveformVisualizer
 import com.example.ui.components.ConfirmationDialog
-import com.example.ui.components.DefaultQuickActions
-import com.example.ui.components.QuickActionItem
-import com.example.ui.components.QuickActionsGrid
 import com.example.ui.theme.JarvisAmberCore
 import com.example.ui.theme.JarvisBackground
 import com.example.ui.theme.JarvisBorderGlow
@@ -94,6 +104,10 @@ import com.example.ui.theme.JarvisSurface
 import com.example.ui.theme.JarvisSurfaceVariant
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun JarvisMainScreen(
@@ -102,15 +116,26 @@ fun JarvisMainScreen(
     onToggleMic: () -> Unit,
     onStopSpeaking: () -> Unit,
     onSubmitText: (String) -> Unit,
-    onQuickAction: (QuickActionItem) -> Unit,
     onNavigate: (ScreenNav) -> Unit,
     onConfirmAction: () -> Unit,
     onCancelAction: () -> Unit,
     onSelectDisambiguatedContact: (com.example.tools.ContactMatch) -> Unit = {},
     onCancelDisambiguation: () -> Unit = {},
-    onSimulateVoiceCommand: (String) -> Unit = {}
+    onSimulateVoiceCommand: (String) -> Unit = {},
+    onToggleSimulatedGuest: (Boolean) -> Unit = {}
 ) {
+    val context = LocalContext.current
     var textInput by remember { mutableStateOf("") }
+    var currentTimeStr by remember { mutableStateOf("") }
+
+    // Real-time HUD Clock
+    LaunchedEffect(Unit) {
+        val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+        while (true) {
+            currentTimeStr = sdf.format(Date())
+            delay(1000)
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -118,7 +143,7 @@ fun JarvisMainScreen(
             .background(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        JarvisSurfaceVariant.copy(alpha = 0.5f),
+                        JarvisSurfaceVariant.copy(alpha = 0.45f),
                         JarvisBackground
                     ),
                     radius = 1200f
@@ -133,19 +158,19 @@ fun JarvisMainScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // 1. Top HUD Bar
+            // 1. Futuristic Telemetry Display (Time, Battery, Network, Current AI)
             item {
-                TopHudBar(
-                    userName = uiState.userName,
-                    greeting = uiState.greeting,
-                    onOpenColorOS = { onNavigate(ScreenNav.COLOROS_HUB) },
+                FuturisticHudDisplay(
+                    currentTime = currentTimeStr,
+                    isOnline = uiState.isOnline,
+                    activeEngine = uiState.activeAiEngine,
                     onOpenSettings = { onNavigate(ScreenNav.SETTINGS) }
                 )
             }
 
-            // 2. Central Arc Reactor AI Core & Status
+            // 2. Center: Large Animated AI Orb with Status Indicator
             item {
-                CentralAiCoreSection(
+                CentralAiOrbSection(
                     mode = uiState.coreMode,
                     audioRmsDb = uiState.audioRmsDb,
                     isSpeaking = uiState.isSpeaking,
@@ -154,7 +179,7 @@ fun JarvisMainScreen(
                 )
             }
 
-            // 3. Audio Waveform Visualizer
+            // 3. Optimized Voice Visualizer (Listening waves / Rotating thinking / Pulsing speak / Idle breath)
             item {
                 AudioWaveformVisualizer(
                     isActive = uiState.isListening || uiState.isSpeaking,
@@ -162,21 +187,55 @@ fun JarvisMainScreen(
                 )
             }
 
-            // 4. Voice Commands Row (Direct live voice test fallback for Preview & Quick Voice)
+            // 3b. Voice Biometrics & Hands-Free OS Action Status
             item {
-                VoiceTestCommandsRow(
+                VoiceBiometricsHudCard(
+                    isVerified = uiState.isVoiceBiometricVerified,
+                    score = uiState.voiceBiometricScore,
+                    isGuest = uiState.isSimulatedGuest,
+                    isAccessibilityEnabled = uiState.isAccessibilityEnabled,
+                    onToggleGuest = onToggleSimulatedGuest,
+                    onCommand = { cmd -> onSimulateVoiceCommand(cmd) },
+                    onOpenAccessibility = {
+                        val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(intent)
+                    }
+                )
+            }
+
+            // 4. Quick Sample Natural Voice Commands Row (Hindi, English, Hinglish)
+            item {
+                NaturalVoiceCommandsPills(
                     onCommandSelected = { cmd -> onSimulateVoiceCommand(cmd) }
                 )
             }
 
-            // 5. Response Display Card
+            // 5. Response & Dialogue Card
             item {
                 ResponseDisplayCard(
                     query = uiState.lastUserQuery,
                     response = uiState.lastJarvisResponse,
                     toolUsed = uiState.lastToolUsed,
+                    aiUsed = uiState.lastAiEngineUsed,
                     mode = uiState.coreMode,
-                    liveTranscript = uiState.liveSpeechTranscript
+                    liveTranscript = uiState.liveSpeechTranscript,
+                    onCopy = {
+                        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        cb?.setPrimaryClip(ClipData.newPlainText("JARVIS", uiState.lastJarvisResponse))
+                        Toast.makeText(context, "Copied response to clipboard", Toast.LENGTH_SHORT).show()
+                    },
+                    onShare = {
+                        val sendIntent = Intent().apply {
+                            action = Intent.ACTION_SEND
+                            putExtra(Intent.EXTRA_TEXT, uiState.lastJarvisResponse)
+                            type = "text/plain"
+                        }
+                        context.startActivity(Intent.createChooser(sendIntent, "Share with").apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
+                    },
+                    onSpeakAgain = { onSimulateVoiceCommand(uiState.lastUserQuery.ifBlank { "Hello" }) },
+                    onStopSpeaking = onStopSpeaking
                 )
             }
 
@@ -194,62 +253,76 @@ fun JarvisMainScreen(
                 )
             }
 
-            // 7. Navigation Hub Chips
+            // 7. Section 17 Primary Dashboard Buttons:
+            // 🎙️ Voice, 💬 Chat, 🤖 ChatGPT, ✨ Gemini, ⚡ Compare, 📱 Phone, 🌐 Search, ⚙️ Settings
             item {
-                NavigationPillRow(
+                DashboardButtonsGrid(
+                    onVoiceClick = onToggleMic,
+                    onChatClick = {
+                        // Focus on text bar or simulate conversational prompt
+                        onSubmitText("Jarvis, what can you do?")
+                    },
+                    onChatGptClick = {
+                        onSubmitText("ChatGPT se pucho ki 25 square meter kitne square feet hote hain")
+                    },
+                    onGeminiClick = {
+                        onSubmitText("Gemini se pucho ki OPPO Reno 14 5G ke key features kya hain")
+                    },
+                    onCompareClick = {
+                        onNavigate(ScreenNav.COMPARE)
+                    },
+                    onPhoneClick = {
+                        onSubmitText("Phone dialer kholo")
+                    },
+                    onSearchClick = {
+                        onSubmitText("Search web for today's news")
+                    },
+                    onSettingsClick = {
+                        onNavigate(ScreenNav.SETTINGS)
+                    }
+                )
+            }
+
+            // 8. Secondary Quick Hub Navigation
+            item {
+                SecondaryNavigationRow(
                     onNavigate = onNavigate
                 )
             }
 
-            // 7. Quick Actions Section
-            item {
-                Column {
+            // 9. Recent Commands Telemetry Section
+            if (history.isNotEmpty()) {
+                item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "QUICK ACTIONS",
+                            text = "RECENT TELEMETRY & ACTIONS",
                             color = JarvisCyanPrimary,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp
                         )
                         Text(
-                            text = "OPPO Reno14 5G Mode",
-                            color = TextSecondary,
-                            fontSize = 11.sp
+                            text = "View All",
+                            color = JarvisCyanBright,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { onNavigate(ScreenNav.HISTORY) }
                         )
                     }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    QuickActionsGrid(
-                        actions = DefaultQuickActions,
-                        onActionClick = onQuickAction
-                    )
-                }
-            }
-
-            // 8. Recent Commands History
-            if (history.isNotEmpty()) {
-                item {
-                    Text(
-                        text = "RECENT TELEMETRY & COMMANDS",
-                        color = JarvisCyanPrimary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    )
                 }
 
-                items(history.take(4).size) { index ->
+                items(history.take(3).size) { index ->
                     val item = history[index]
                     RecentCommandTile(item = item)
                 }
             }
         }
 
-        // Disambiguation Dialog
+        // Contact Disambiguation Dialog
         if (uiState.disambiguationPending != null) {
             com.example.ui.components.ContactDisambiguationDialog(
                 queryName = uiState.disambiguationPending.queryName,
@@ -272,142 +345,147 @@ fun JarvisMainScreen(
 }
 
 @Composable
-private fun TopHudBar(
-    userName: String,
-    greeting: String,
-    onOpenColorOS: () -> Unit,
+private fun FuturisticHudDisplay(
+    currentTime: String,
+    isOnline: Boolean,
+    activeEngine: ActiveAiEngine,
     onOpenSettings: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = JarvisSurface.copy(alpha = 0.9f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, JarvisBorderGlow.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
     ) {
-        Column {
-            Text(
-                text = "JARVIS AI",
-                color = JarvisCyanPrimary,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 2.sp
-            )
-            Text(
-                text = "$greeting, $userName.",
-                color = TextPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // Reno14 5G Badge
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(JarvisSurfaceVariant)
-                    .border(1.dp, JarvisBorderGlow.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                    .clickable { onOpenColorOS() }
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                    .testTag("device_badge_button")
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.PhoneAndroid,
-                        contentDescription = null,
-                        tint = JarvisCyanPrimary,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Time Display
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = currentTime.ifBlank { "12:00" },
+                    color = JarvisCyanBright,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 1.sp
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Box(
+                    modifier = Modifier
+                        .background(JarvisSurfaceVariant, RoundedCornerShape(6.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
                     Text(
-                        text = "ColorOS 16",
-                        color = JarvisCyanBright,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        text = "Reno 14 5G",
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
 
-            // Settings button
-            IconButton(
-                onClick = onOpenSettings,
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(JarvisSurfaceVariant)
-                    .testTag("main_settings_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Settings",
-                    tint = JarvisCyanPrimary,
-                    modifier = Modifier.size(18.dp)
-                )
+            // Status Indicators
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Online/Offline status
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (isOnline) Icons.Default.Wifi else Icons.Default.WifiOff,
+                        contentDescription = null,
+                        tint = if (isOnline) JarvisSuccessGreen else JarvisDangerRed,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(
+                        text = if (isOnline) "ONLINE" else "OFFLINE",
+                        color = if (isOnline) JarvisSuccessGreen else JarvisDangerRed,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // AI Engine Indicator
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(JarvisSurfaceVariant)
+                        .border(1.dp, JarvisBorderGlow.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                        .clickable { onOpenSettings() }
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                ) {
+                    val label = when (activeEngine) {
+                        ActiveAiEngine.AUTO -> "AUTO AI"
+                        ActiveAiEngine.CHATGPT -> "CHATGPT"
+                        ActiveAiEngine.GEMINI -> "GEMINI"
+                        ActiveAiEngine.COMPARE -> "COMPARE"
+                    }
+                    Text(
+                        text = label,
+                        color = JarvisCyanPrimary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun CentralAiCoreSection(
+private fun CentralAiOrbSection(
     mode: AiCoreMode,
     audioRmsDb: Float,
     isSpeaking: Boolean,
     onToggleMic: () -> Unit,
     onStopSpeaking: () -> Unit
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "mic_animation")
-    val micScale by infiniteTransition.animateFloat(
+    val infiniteTransition = rememberInfiniteTransition(label = "orb_pulse")
+    val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1f,
-        targetValue = 1.09f,
+        targetValue = 1.07f,
         animationSpec = infiniteRepeatable(
-            animation = tween(550, easing = FastOutSlowInEasing),
+            animation = tween(600, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "mic_scale"
-    )
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.95f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(550, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "glow_alpha"
+        label = "pulse_scale"
     )
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // State label badge (Requirements: "JARVIS is ready", "Listening...", "Processing...")
-        val (stateText, stateColor) = when (mode) {
-            AiCoreMode.IDLE -> Pair("JARVIS is ready", JarvisCyanPrimary)
-            AiCoreMode.LISTENING -> Pair("Listening...", JarvisCyanBright)
-            AiCoreMode.THINKING, AiCoreMode.EXECUTING -> Pair("Processing...", JarvisAmberCore)
-            AiCoreMode.SPEAKING -> Pair("Speaking...", JarvisElectricBlue)
-            AiCoreMode.CONFIRMING -> Pair("Waiting Confirmation", JarvisAmberCore)
-            AiCoreMode.ERROR -> Pair("Action Required", JarvisDangerRed)
+        // Status: Listening, Thinking, Speaking, Ready
+        val (statusText, statusColor) = when (mode) {
+            AiCoreMode.IDLE -> Pair("Ready", JarvisCyanPrimary)
+            AiCoreMode.LISTENING -> Pair("Listening", JarvisCyanBright)
+            AiCoreMode.THINKING, AiCoreMode.EXECUTING -> Pair("Thinking", JarvisAmberCore)
+            AiCoreMode.SPEAKING -> Pair("Speaking", JarvisElectricBlue)
+            AiCoreMode.CONFIRMING -> Pair("Confirming", JarvisAmberCore)
+            AiCoreMode.ERROR -> Pair("Attention Required", JarvisDangerRed)
         }
 
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
-                .background(stateColor.copy(alpha = 0.15f))
-                .border(1.dp, stateColor.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-                .padding(horizontal = 14.dp, vertical = 4.dp)
-        ) {
-            Text(
-                text = stateText,
-                color = stateColor,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp
-            )
-        }
+        // Orb Title & Subtitle
+        Text(
+            text = "JARVIS V3",
+            color = JarvisCyanPrimary,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = 3.sp
+        )
+        Text(
+            text = "Your Personal AI Assistant",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            letterSpacing = 1.sp
+        )
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Arc Reactor Circular AI Core
+        // Large Animated AI Orb
         ArcReactorCore(
             mode = mode,
             audioRmsDb = audioRmsDb,
@@ -423,7 +501,26 @@ private fun CentralAiCoreSection(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Tap to talk action button with visible animation while listening
+        // Status Badge
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(statusColor.copy(alpha = 0.15f))
+                .border(1.dp, statusColor.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 4.dp)
+        ) {
+            Text(
+                text = "STATUS: $statusText",
+                color = statusColor,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Tap-to-Talk action button
         Button(
             onClick = onToggleMic,
             shape = RoundedCornerShape(24.dp),
@@ -431,82 +528,272 @@ private fun CentralAiCoreSection(
                 containerColor = if (mode == AiCoreMode.LISTENING) JarvisDangerRed else JarvisCyanPrimary,
                 contentColor = Color.Black
             ),
-            border = if (mode == AiCoreMode.LISTENING) BorderStroke(2.dp, JarvisCyanBright.copy(alpha = glowAlpha)) else null,
             modifier = Modifier
-                .height(44.dp)
-                .scale(if (mode == AiCoreMode.LISTENING) micScale else 1f)
+                .height(42.dp)
+                .scale(if (mode == AiCoreMode.LISTENING) pulseScale else 1f)
                 .testTag("tap_to_talk_button")
         ) {
             Icon(
                 imageVector = if (mode == AiCoreMode.LISTENING) Icons.Default.Stop else Icons.Default.Mic,
                 contentDescription = "Microphone",
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(18.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (mode == AiCoreMode.LISTENING) "Listening... (Tap to Stop)" else "Tap to Speak",
+                text = if (mode == AiCoreMode.LISTENING) "Listening... Tap to Stop" else "Tap to Speak",
                 fontWeight = FontWeight.Bold,
-                fontSize = 14.sp
+                fontSize = 13.sp
             )
         }
     }
 }
 
 @Composable
-private fun VoiceTestCommandsRow(
-    onCommandSelected: (String) -> Unit
+private fun VoiceBiometricsHudCard(
+    isVerified: Boolean,
+    score: Float,
+    isGuest: Boolean,
+    isAccessibilityEnabled: Boolean,
+    onToggleGuest: (Boolean) -> Unit,
+    onCommand: (String) -> Unit,
+    onOpenAccessibility: () -> Unit
 ) {
-    val sampleCommands = listOf(
-        "YouTube kholo",
-        "WhatsApp kholo",
-        "Chrome kholo",
-        "Mera battery percentage batao",
-        "Time kya hua hai",
-        "Ammi ko call karo"
-    )
-
     Card(
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = JarvisSurface.copy(alpha = 0.9f)),
+        colors = CardDefaults.cardColors(containerColor = JarvisSurface.copy(alpha = 0.92f)),
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, JarvisCyanPrimary.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+            .border(
+                1.dp,
+                if (isVerified) JarvisSuccessGreen.copy(alpha = 0.5f) else JarvisDangerRed.copy(alpha = 0.5f),
+                RoundedCornerShape(14.dp)
+            )
+            .testTag("voice_biometrics_hud_card")
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (isVerified) Icons.Default.Security else Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = if (isVerified) JarvisSuccessGreen else JarvisDangerRed,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isVerified) "VOICE BIOMETRIC: VERIFIED" else "VOICE BIOMETRIC: GUEST REJECTED",
+                        color = if (isVerified) JarvisSuccessGreen else JarvisDangerRed,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp
+                    )
+                }
+
+                // Similarity score badge
+                Box(
+                    modifier = Modifier
+                        .background(
+                            if (isVerified) JarvisSuccessGreen.copy(alpha = 0.15f) else JarvisDangerRed.copy(alpha = 0.15f),
+                            RoundedCornerShape(6.dp)
+                        )
+                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "${String.format(Locale.US, "%.1f", score)}% (Req: ≥85%)",
+                        color = if (isVerified) JarvisSuccessGreen else JarvisDangerRed,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Subtitle & Status
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isVerified)
+                        "Hands-free OS actions (Lock, Unlock, Calling) authorized."
+                    else
+                        "Voice similarity <85%. High-privilege OS actions are blocked.",
+                    color = TextSecondary,
+                    fontSize = 10.sp,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Guest mode test toggle chip
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (isGuest) JarvisDangerRed.copy(alpha = 0.2f) else JarvisSurfaceVariant)
+                        .border(
+                            1.dp,
+                            if (isGuest) JarvisDangerRed else JarvisBorderGlow.copy(alpha = 0.4f),
+                            RoundedCornerShape(12.dp)
+                        )
+                        .clickable { onToggleGuest(!isGuest) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = if (isGuest) "Guest Mode: ON" else "Test Guest Voice",
+                        color = if (isGuest) JarvisDangerRed else JarvisCyanBright,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Quick Voice-Trigger OS Actions
+            Row(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Mic,
-                    contentDescription = null,
-                    tint = JarvisCyanPrimary,
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = "VOICE COMMANDS (TAP TO SPEAK)",
-                    color = JarvisCyanPrimary,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
+                // Lock Phone
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(JarvisSurfaceVariant)
+                        .border(1.dp, JarvisBorderGlow.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                        .clickable { onCommand("Phone lock karo") }
+                        .padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "🔒 Lock Phone",
+                        color = TextPrimary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                // Unlock Phone
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(JarvisSurfaceVariant)
+                        .border(1.dp, JarvisBorderGlow.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                        .clickable { onCommand("Phone unlock karo") }
+                        .padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "🔓 Unlock Phone",
+                        color = TextPrimary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                // Call Contact
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(JarvisSurfaceVariant)
+                        .border(1.dp, JarvisBorderGlow.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                        .clickable { onCommand("Abdul ko call karo") }
+                        .padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "📞 Direct Call",
+                        color = TextPrimary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                // Torch
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(JarvisSurfaceVariant)
+                        .border(1.dp, JarvisBorderGlow.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                        .clickable { onCommand("Torch on") }
+                        .padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "💡 Torch",
+                        color = TextPrimary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
-            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun NaturalVoiceCommandsPills(
+    onCommandSelected: (String) -> Unit
+) {
+    val naturalCommands = listOf(
+        "Phone lock karo",
+        "Phone unlock karo",
+        "Abdul ko call karo",
+        "Torch on",
+        "Torch off",
+        "Volume kam karo",
+        "Volume badhao",
+        "Bhai ko phone laga do",
+        "WhatsApp kholo",
+        "Kal subah 7 baje mujhe utha dena",
+        "10 minute ka timer laga do",
+        "Bluetooth settings kholo",
+        "ChatGPT se pucho ki 25 square meter kitne square feet hote hain",
+        "Gemini se iska answer lo",
+        "Search web for today's news",
+        "Delhi ka weather batao"
+    )
+
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = JarvisSurface.copy(alpha = 0.85f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, JarvisBorderGlow.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Text(
+                text = "SPOKEN COMMANDS (HINDI / ENGLISH / HINGLISH)",
+                color = JarvisCyanPrimary,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(6.dp))
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(vertical = 2.dp)
             ) {
-                items(sampleCommands) { cmd ->
+                items(naturalCommands) { cmd ->
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(RoundedCornerShape(18.dp))
                             .background(JarvisSurfaceVariant)
-                            .border(1.dp, JarvisBorderGlow.copy(alpha = 0.6f), RoundedCornerShape(20.dp))
+                            .border(1.dp, JarvisBorderGlow.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
                             .clickable { onCommandSelected(cmd) }
-                            .padding(horizontal = 12.dp, vertical = 7.dp)
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Text(
-                            text = "🎙️ $cmd",
+                            text = "“$cmd”",
                             color = TextPrimary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
@@ -523,15 +810,20 @@ private fun ResponseDisplayCard(
     query: String,
     response: String,
     toolUsed: String,
+    aiUsed: String,
     mode: AiCoreMode,
-    liveTranscript: String = ""
+    liveTranscript: String,
+    onCopy: () -> Unit,
+    onShare: () -> Unit,
+    onSpeakAgain: () -> Unit,
+    onStopSpeaking: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = JarvisSurface),
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, JarvisBorderGlow.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+            .border(1.dp, JarvisBorderGlow.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
             .testTag("jarvis_response_card")
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -539,7 +831,7 @@ private fun ResponseDisplayCard(
             if (mode == AiCoreMode.LISTENING && liveTranscript.isNotBlank()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "LISTENING:",
+                        text = "HEARING:",
                         color = JarvisCyanBright,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
@@ -574,28 +866,52 @@ private fun ResponseDisplayCard(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "JARVIS:",
-                    color = JarvisCyanPrimary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
-                if (toolUsed != "none") {
-                    Spacer(modifier = Modifier.width(8.dp))
+            // Top response header with AI Engine Badge & Action Icons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "JARVIS V3:",
+                        color = JarvisCyanPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    // Active AI Engine used
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(JarvisSurfaceVariant)
+                            .background(JarvisSurfaceVariant, RoundedCornerShape(4.dp))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = toolUsed,
+                            text = aiUsed,
                             color = JarvisCyanBright,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+                }
+
+                // Action buttons: Speak, Copy, Share, Stop
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (mode == AiCoreMode.SPEAKING) {
+                        IconButton(onClick = onStopSpeaking, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Stop, contentDescription = "Stop", tint = JarvisDangerRed, modifier = Modifier.size(16.dp))
+                        }
+                    } else {
+                        IconButton(onClick = onSpeakAgain, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.VolumeUp, contentDescription = "Speak", tint = TextSecondary, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                    IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = TextSecondary, modifier = Modifier.size(16.dp))
+                    }
+                    IconButton(onClick = onShare, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Share, contentDescription = "Share", tint = TextSecondary, modifier = Modifier.size(16.dp))
                     }
                 }
             }
@@ -629,7 +945,7 @@ private fun CommandInputBar(
         OutlinedTextField(
             value = text,
             onValueChange = onTextChange,
-            placeholder = { Text("Type command (e.g. YouTube kholo, Srinagar weather)", fontSize = 13.sp) },
+            placeholder = { Text("Speak or type (e.g. Torch on, Kal ka weather, Call Abdul)", fontSize = 12.sp) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { onSubmit() }),
@@ -652,7 +968,7 @@ private fun CommandInputBar(
                 if (text.isNotBlank()) onSubmit() else onToggleMic()
             },
             modifier = Modifier
-                .size(50.dp)
+                .size(48.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(JarvisCyanPrimary)
                 .testTag("submit_command_button")
@@ -667,7 +983,69 @@ private fun CommandInputBar(
 }
 
 @Composable
-private fun NavigationPillRow(
+private fun DashboardButtonsGrid(
+    onVoiceClick: () -> Unit,
+    onChatClick: () -> Unit,
+    onChatGptClick: () -> Unit,
+    onGeminiClick: () -> Unit,
+    onCompareClick: () -> Unit,
+    onPhoneClick: () -> Unit,
+    onSearchClick: () -> Unit,
+    onSettingsClick: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "ASSISTANT CAPABILITIES",
+            color = JarvisCyanPrimary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            DashboardActionButton("🎙️ Voice", JarvisCyanPrimary, Modifier.weight(1f), onVoiceClick)
+            DashboardActionButton("💬 Chat", JarvisCyanBright, Modifier.weight(1f), onChatClick)
+            DashboardActionButton("🤖 ChatGPT", JarvisElectricBlue, Modifier.weight(1f), onChatGptClick)
+            DashboardActionButton("✨ Gemini", JarvisCyanPrimary, Modifier.weight(1f), onGeminiClick)
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            DashboardActionButton("⚡ Compare", JarvisAmberCore, Modifier.weight(1f), onCompareClick)
+            DashboardActionButton("📱 Phone", JarvisSuccessGreen, Modifier.weight(1f), onPhoneClick)
+            DashboardActionButton("🌐 Search", JarvisCyanBright, Modifier.weight(1f), onSearchClick)
+            DashboardActionButton("⚙️ Settings", TextSecondary, Modifier.weight(1f), onSettingsClick)
+        }
+    }
+}
+
+@Composable
+private fun DashboardActionButton(
+    label: String,
+    tintColor: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(JarvisSurfaceVariant)
+            .border(1.dp, tintColor.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = TextPrimary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun SecondaryNavigationRow(
     onNavigate: (ScreenNav) -> Unit
 ) {
     Row(
@@ -675,9 +1053,9 @@ private fun NavigationPillRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         PillButton("Contacts", Modifier.weight(1f)) { onNavigate(ScreenNav.CONTACTS) }
-        PillButton("ColorOS", Modifier.weight(1f)) { onNavigate(ScreenNav.COLOROS_HUB) }
-        PillButton("Vault", Modifier.weight(1f)) { onNavigate(ScreenNav.MEMORY_VAULT) }
-        PillButton("Routines", Modifier.weight(1f)) { onNavigate(ScreenNav.ROUTINES) }
+        PillButton("Permissions", Modifier.weight(1f)) { onNavigate(ScreenNav.PERMISSION_CENTER) }
+        PillButton("Memory Vault", Modifier.weight(1f)) { onNavigate(ScreenNav.MEMORY_VAULT) }
+        PillButton("ColorOS Hub", Modifier.weight(1f)) { onNavigate(ScreenNav.COLOROS_HUB) }
         PillButton("Wizard", Modifier.weight(1f)) { onNavigate(ScreenNav.SETUP_WIZARD) }
     }
 }
@@ -686,17 +1064,17 @@ private fun NavigationPillRow(
 private fun PillButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(JarvisSurfaceVariant)
-            .border(1.dp, JarvisBorderGlow.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+            .border(1.dp, JarvisBorderGlow.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
             .clickable { onClick() }
-            .padding(vertical = 8.dp, horizontal = 4.dp),
+            .padding(vertical = 8.dp, horizontal = 2.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
             color = JarvisCyanPrimary,
-            fontSize = 11.sp,
+            fontSize = 10.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1
         )
